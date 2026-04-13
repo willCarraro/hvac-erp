@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0F1923">
+<title>ARCLASS — Novo Orçamento</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+.sum-sticky {
+  position: sticky; bottom: var(--nav-h);
+  background: var(--bg); border-top: 1px solid var(--bdr);
+  padding: 12px 14px; z-index: 90;
+}
+.sum-row { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; }
+.sum-total { font-size: 20px; font-weight: 800; color: var(--acc); }
+</style>
+</head>
+<body>
+<div id="app"><div class="loading"><div class="spin"></div><p>Carregando...</p></div></div>
+
+<script src="js/config.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/calc.js"></script>
+<script>
+const params     = new URLSearchParams(window.location.search);
+const preCustomer = params.get('customer_id');
+
+let customers  = [];
+let templates  = [];
+
+(async () => {
+  const ok = await requireAuth();
+  if (!ok) return;
+
+  const [{ data: cust }, { data: tpl }] = await Promise.all([
+    sb.from('customers').select('id, name').eq('is_active', true).order('name'),
+    sb.from('quote_templates').select('*').eq('is_active', true).order('service_type').order('capacity_btu'),
+  ]);
+
+  customers = cust || [];
+  templates = tpl || [];
+
+  const custOptions = customers.map(c =>
+    `<option value="${c.id}" ${c.id == preCustomer ? 'selected' : ''}>${c.name}</option>`
+  ).join('');
+
+  // Agrupar templates por tipo
+  const groups = {
+    installation: templates.filter(t => t.service_type === 'installation'),
+    preventive:   templates.filter(t => t.service_type === 'preventive'),
+    corrective:   templates.filter(t => t.service_type === 'corrective'),
+  };
+
+  const tplSection = (label, items) => items.length ? `
+    <div style="font-size:11px;color:var(--txt2);font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin:8px 0 6px;">${label}</div>
+    ${items.map(t => `
+      <div class="tpl-card" id="tpl${t.id}" onclick="pickTpl(${t.id})">
+        <h4>${t.name}</h4>
+        <p>${dfLabel(t.difficulty)} · ${t.labor_hours}h MO${t.capacity_btu ? ' · ' + t.capacity_btu.toLocaleString() + ' BTU' : ''}</p>
+      </div>`).join('')}` : '';
+
+  document.getElementById('app').innerHTML = `
+  <div class="page">
+    <div class="hdr">
+      <button class="back-btn" onclick="history.back()">←</button>
+      <h1>Novo Orçamento</h1>
+    </div>
+    <div class="fp">
+
+      <!-- Cliente -->
+      <div class="fsec" style="margin-top:4px;">Cliente</div>
+      <div class="fg">
+        <label class="fl">Cliente *</label>
+        <select class="fs" id="qCust">
+          <option value="">Selecione o cliente...</option>
+          ${custOptions}
+        </select>
+      </div>
+      <div style="margin-top:6px;">
+        <span style="font-size:12px;color:var(--acc);cursor:pointer;" onclick="nav('cliente-novo.html')">+ Cadastrar novo cliente</span>
+      </div>
+
+      <!-- Templates -->
+      <div class="fsec">Template (opcional)</div>
+      <div style="font-size:12px;color:var(--txt2);margin-bottom:10px;">Toque para preencher automaticamente</div>
+      ${tplSection('Instalação', groups.installation)}
+      ${tplSection('Preventiva', groups.preventive)}
+      ${tplSection('Corretiva',  groups.corrective)}
+
+      <!-- Detalhes -->
+      <div class="fsec">Detalhes do serviço</div>
+
+      <div class="fg">
+        <label class="fl">Tipo de serviço *</label>
+        <select class="fs" id="qSt" onchange="recalc()">
+          <option value="installation">Instalação</option>
+          <option value="preventive">Preventiva</option>
+          <option value="corrective">Corretiva</option>
+        </select>
+      </div>
+
+      <div class="fg">
+        <label class="fl">Descrição do serviço *</label>
+        <input class="fi" id="qDesc" placeholder="Ex: Instalação Split 12.000 BTU — Sala" oninput="recalc()">
+      </div>
+
+      <div class="fr">
+        <div class="fg">
+          <label class="fl">Dificuldade</label>
+          <select class="fs" id="qDiff" onchange="recalc()">
+            <option value="easy">Fácil (×${financeConfig?.mult_easy||1.0})</option>
+            <option value="medium" selected>Médio (×${financeConfig?.mult_medium||1.3})</option>
+            <option value="hard">Difícil (×${financeConfig?.mult_hard||1.7})</option>
+          </select>
+        </div>
+        <div class="fg">
+          <label class="fl">Urgente?</label>
+          <select class="fs" id="qUrg" onchange="recalc()">
+            <option value="false">Não</option>
+            <option value="true">Sim (+${financeConfig?.urgency_surcharge||50}%)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Custos -->
+      <div class="fsec">Custos</div>
+
+      <div class="fr">
+        <div class="fg">
+          <label class="fl">Horas mão de obra</label>
+          <input class="fi" id="qLh" type="number" value="0" step="0.5" min="0" oninput="recalc()" inputmode="decimal">
+        </div>
+        <div class="fg">
+          <label class="fl">Custo material R$</label>
+          <input class="fi" id="qMc" type="number" value="0" step="10" min="0" oninput="recalc()" inputmode="decimal">
+        </div>
+      </div>
+      <div class="fr">
+        <div class="fg">
+          <label class="fl">Custo gás R$</label>
+          <input class="fi" id="qGc" type="number" value="0" step="10" min="0" oninput="recalc()" inputmode="decimal">
+        </div>
+        <div class="fg">
+          <label class="fl">Custo peças R$</label>
+          <input class="fi" id="qPc" type="number" value="0" step="10" min="0" oninput="recalc()" inputmode="decimal">
+        </div>
+      </div>
+
+      <div class="fg">
+        <label class="fl">Desconto R$</label>
+        <input class="fi" id="qDisc" type="number" value="0" step="10" min="0" oninput="recalc()" inputmode="decimal">
+      </div>
+
+      <div class="fg">
+        <label class="fl">Observações para o cliente</label>
+        <textarea class="fta" id="qNotes" placeholder="Prazo de execução, condições, garantia..."></textarea>
+      </div>
+
+      <div id="qErr" style="margin-top:10px;"></div>
+      <button class="btn bp" id="savebtn" style="margin-top:16px;" onclick="doSave()">✓ Salvar Orçamento</button>
+    </div>
+
+    <!-- Resumo sticky -->
+    <div class="sum-sticky">
+      <div class="sum-row"><span style="color:var(--txt2);">Mão de obra</span><span id="sLab">R$ 0,00</span></div>
+      <div class="sum-row"><span style="color:var(--txt2);">Material + Gás + Peças</span><span id="sMat">R$ 0,00</span></div>
+      <div class="sum-row"><span style="color:var(--txt2);">Desconto</span><span id="sDisc" style="color:var(--err);">— R$ 0,00</span></div>
+      <div class="sum-row" style="margin-top:4px;">
+        <span style="font-weight:700;">TOTAL</span>
+        <span class="sum-total" id="sTotal">R$ 0,00</span>
+      </div>
+      <div class="sum-row"><span style="color:var(--txt2);font-size:12px;">Lucro estimado</span><span id="sProfit" style="font-size:12px;">R$ 0,00</span></div>
+    </div>
+  </div>`;
+
+  recalc();
+})();
+
+function pickTpl(id) {
+  document.querySelectorAll('.tpl-card').forEach(e => e.classList.remove('sel'));
+  document.getElementById('tpl' + id)?.classList.add('sel');
+  const t = templates.find(x => x.id === id);
+  if (!t) return;
+  const set = (elId, v) => { const el = document.getElementById(elId); if (el) el.value = v; };
+  set('qSt',   t.service_type);
+  set('qDiff', t.difficulty);
+  set('qLh',   t.labor_hours);
+  if (!document.getElementById('qDesc').value) set('qDesc', t.name);
+  recalc();
+}
+
+function recalc() {
+  if (!financeConfig) return;
+  const item = {
+    service_type:  document.getElementById('qSt')?.value   || 'installation',
+    difficulty:    document.getElementById('qDiff')?.value  || 'medium',
+    is_urgent:     document.getElementById('qUrg')?.value   === 'true',
+    labor_hours:   parseFloat(document.getElementById('qLh')?.value)  || 0,
+    material_cost: parseFloat(document.getElementById('qMc')?.value)  || 0,
+    gas_cost:      parseFloat(document.getElementById('qGc')?.value)  || 0,
+    parts_cost:    parseFloat(document.getElementById('qPc')?.value)  || 0,
+  };
+  const disc = parseFloat(document.getElementById('qDisc')?.value) || 0;
+  const r    = calcItem(item, financeConfig);
+  const finalPrice = Math.max(0, r.price - disc);
+  const profit     = finalPrice - r.cost;
+
+  setEl('sLab',    fmt(r.labor));
+  setEl('sMat',    fmt(r.matP + r.gasP + r.parP));
+  setEl('sDisc',   '— ' + fmt(disc));
+  setEl('sTotal',  fmt(finalPrice));
+  const sp = document.getElementById('sProfit');
+  if (sp) { sp.textContent = fmt(profit); sp.style.color = profit >= 0 ? 'var(--ok)' : 'var(--err)'; }
+}
+
+async function doSave() {
+  clearErr('qErr');
+  const custId = document.getElementById('qCust')?.value;
+  const desc   = val('qDesc');
+  if (!custId) { showErr('qErr', 'Selecione o cliente'); return; }
+  if (!desc)   { showErr('qErr', 'Preencha a descrição do serviço'); return; }
+  if (!financeConfig) { showErr('qErr', 'Configuração financeira não carregada'); return; }
+
+  setBtnLoading('savebtn', true, 'Salvar Orçamento');
+
+  const item = {
+    service_type:  document.getElementById('qSt')?.value  || 'installation',
+    difficulty:    document.getElementById('qDiff')?.value || 'medium',
+    is_urgent:     document.getElementById('qUrg')?.value  === 'true',
+    labor_hours:   parseFloat(document.getElementById('qLh')?.value)  || 0,
+    material_cost: parseFloat(document.getElementById('qMc')?.value)  || 0,
+    gas_cost:      parseFloat(document.getElementById('qGc')?.value)  || 0,
+    parts_cost:    parseFloat(document.getElementById('qPc')?.value)  || 0,
+  };
+  const disc   = parseFloat(document.getElementById('qDisc')?.value) || 0;
+  const notes  = val('qNotes');
+  const r      = calcItem(item, financeConfig);
+  const finalPrice = Math.max(0, r.price - disc);
+  const profit     = finalPrice - r.cost;
+
+  // Próxima sequência do ano
+  const year = new Date().getFullYear();
+  const { data: lastQ } = await sb.from('quotes')
+    .select('sequence').eq('year', year)
+    .order('sequence', { ascending: false }).limit(1).single();
+  const seq = (lastQ?.sequence || 0) + 1;
+
+  // Criar orçamento
+  const { data: q, error: qe } = await sb.from('quotes').insert([{
+    customer_id:      parseInt(custId),
+    year, sequence:   seq, version: 1,
+    status:           'draft',
+    discount:         disc,
+    total_cost:       r.cost,
+    total_price:      finalPrice,
+    estimated_profit: profit,
+    notes,
+    params_snapshot:  financeConfig,
+    created_by_id:    currentUser.id,
+  }]).select('id').single();
+
+  if (qe) { showErr('qErr', 'Erro ao salvar: ' + qe.message); setBtnLoading('savebtn', false, 'Salvar Orçamento'); return; }
+
+  // Criar item do orçamento
+  await sb.from('quote_items').insert([{
+    quote_id:      q.id,
+    description:   desc,
+    service_type:  item.service_type,
+    difficulty:    item.difficulty,
+    is_urgent:     item.is_urgent,
+    labor_hours:   item.labor_hours,
+    material_cost: item.material_cost,
+    gas_cost:      item.gas_cost,
+    parts_cost:    item.parts_cost,
+    quantity:      1,
+    created_by_id: currentUser.id,
+  }]);
+
+  toast('Orçamento criado!', 'ok');
+  setTimeout(() => nav('orcamento.html?id=' + q.id), 800);
+}
+</script>
+</body>
+</html>
