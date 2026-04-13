@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0F1923">
+<title>MeuGestHVAC — Corretiva</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+.add-btn{background:rgba(0,191,255,.12);border:1.5px dashed var(--acc);border-radius:10px;padding:12px;width:100%;color:var(--acc);font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;}
+.part-form{background:var(--bg3);border-radius:12px;padding:12px;margin-bottom:12px;}
+.part-item{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:10px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;}
+.part-del{background:none;border:none;color:var(--err);font-size:16px;cursor:pointer;}
+.toggle-section{background:var(--bg2);border:1.5px solid var(--bdr);border-radius:12px;padding:14px;margin-bottom:10px;}
+.toggle-header{display:flex;align-items:center;gap:12px;cursor:pointer;}
+.toggle-header input[type=checkbox]{width:20px;height:20px;accent-color:var(--acc);cursor:pointer;}
+.toggle-header span{font-size:14px;font-weight:700;}
+.toggle-body{margin-top:12px;padding-top:12px;border-top:1px solid var(--bdr);}
+.footer-box{background:var(--bg3);border-radius:12px;padding:14px;margin-top:4px;}
+.f-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;font-size:13px;border-bottom:1px solid var(--bdr);}
+.f-row:last-child{border-bottom:none;}
+.f-lbl{color:var(--txt2);}
+.f-total{font-size:18px;font-weight:800;color:var(--acc);}
+.f-profit{font-size:13px;font-weight:700;}
+.disc-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+</style>
+</head>
+<body>
+<div id="app"><div class="loading"><div class="spin"></div><p>Carregando...</p></div></div>
+<script src="js/config.js"></script>
+<script src="js/auth.js"></script>
+<script>
+const params = new URLSearchParams(window.location.search);
+const custId = params.get('customer_id');
+const UNITS  = ['metro','unidade','conjunto','kg','litro','par','rolo','m²','hora'];
+const GAS_TYPES = ['R22','R32','R410a','R407c','R134a','R141b'];
+
+let customer = null;
+let parts    = [];
+let showForm = false;
+
+(async()=>{
+  const ok = await requireAuth(); if(!ok) return;
+  if(!custId){nav('orcamento-novo.html');return;}
+  const {data}=await sb.from('customers').select('id,name,phone').eq('id',custId).single();
+  customer=data; draw();
+})();
+
+function draw(){
+  const c=financeConfig||{};
+  document.getElementById('app').innerHTML=`
+  <div class="page">
+    <div class="hdr">
+      <button class="back-btn" onclick="history.back()">←</button>
+      <h1>⚡ Corretiva</h1>
+    </div>
+    <div class="fp">
+      <div style="background:rgba(0,191,255,.08);border:1.5px solid var(--acc);border-radius:10px;padding:10px 14px;margin-bottom:16px;">
+        <div style="font-size:11px;color:var(--txt2);text-transform:uppercase;letter-spacing:.6px;">Cliente</div>
+        <div style="font-size:15px;font-weight:700;margin-top:2px;">${customer?.name||'—'}</div>
+      </div>
+
+      <div class="fg">
+        <label class="fl">Descrição dos serviços realizados *</label>
+        <textarea class="fta" id="qDesc" placeholder="Descreva os serviços, diagnóstico e procedimentos..."></textarea>
+      </div>
+
+      <!-- Peças -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:16px 0 8px;">
+        <div style="font-size:14px;font-weight:700;">🔩 Peças</div>
+        <div style="font-size:11px;color:var(--txt2);">Margem: ${c.parts_margin||30}%</div>
+      </div>
+      <div id="partList"></div>
+      ${showForm ? partFormHtml() : `<button class="add-btn" onclick="showForm=true;draw()">+ Adicionar peça</button>`}
+
+      <!-- Gás -->
+      <div class="fsec">Fluido Refrigerante</div>
+      <div class="toggle-section" id="gasSection">
+        <div class="toggle-header" onclick="toggleSection('gas')">
+          <input type="checkbox" id="chkGas" onchange="updateFooter()">
+          <span>💨 Incluir gás no orçamento</span>
+        </div>
+        <div class="toggle-body" id="gasBody" style="display:none;">
+          <div class="fg"><label class="fl">Tipo de gás</label>
+            <select class="fs" id="gasType">
+              ${GAS_TYPES.map(g=>`<option>${g}</option>`).join('')}
+            </select>
+          </div>
+          <div class="fr" style="margin-top:8px;">
+            <div class="fg"><label class="fl">Quantidade (kg)</label>
+              <input class="fi" id="gasKg" type="number" value="0" step="0.1" min="0" inputmode="decimal" oninput="updateFooter()">
+            </div>
+            <div class="fg"><label class="fl">Custo por kg R$</label>
+              <input class="fi" id="gasCostKg" type="number" value="0" step="10" min="0" inputmode="decimal" oninput="updateFooter()">
+            </div>
+          </div>
+          <div style="margin-top:8px;font-size:11px;color:var(--txt2);">Margem aplicada: ${c.gas_margin||25}%</div>
+        </div>
+      </div>
+
+      <!-- Nitrogênio -->
+      <div class="toggle-section">
+        <div class="toggle-header" onclick="toggleSection('n2')">
+          <input type="checkbox" id="chkN2" onchange="updateFooter()">
+          <span>🔵 Incluir nitrogênio</span>
+        </div>
+        <div class="toggle-body" id="n2Body" style="display:none;">
+          <div class="fr">
+            <div class="fg"><label class="fl">Quantidade (m³)</label>
+              <input class="fi" id="n2M3" type="number" value="0" step="0.1" min="0" inputmode="decimal" oninput="updateFooter()">
+            </div>
+            <div class="fg"><label class="fl">Custo R$</label>
+              <input class="fi" id="n2Cost" type="number" value="0" step="5" min="0" inputmode="decimal" oninput="updateFooter()">
+            </div>
+          </div>
+          <div style="margin-top:8px;font-size:11px;color:var(--txt2);">Margem aplicada: ${c.gas_margin||25}%</div>
+        </div>
+      </div>
+
+      <!-- Hora técnica -->
+      <div class="fsec">Hora técnica</div>
+      <div class="fg">
+        <label class="fl">Horas trabalhadas</label>
+        <input class="fi" id="qLh" type="number" value="0" step="0.5" min="0" inputmode="decimal" oninput="updateFooter()">
+      </div>
+      <div style="font-size:11px;color:var(--txt2);margin-top:4px;">Taxa hora: ${fmt(c.hourly_rate||150)}/h · Piso mínimo corretiva: ${fmt(c.min_corrective_fee||250)}</div>
+
+      <!-- Desconto -->
+      <div class="fsec">Desconto</div>
+      <div class="disc-row">
+        <div class="fg"><label class="fl">Em %</label>
+          <input class="fi" id="discPct" type="number" value="0" step="1" min="0" max="100" inputmode="decimal" oninput="syncDisc('pct')"></div>
+        <div class="fg"><label class="fl">Em R$</label>
+          <input class="fi" id="discVal" type="number" value="0" step="10" min="0" inputmode="decimal" oninput="syncDisc('val')"></div>
+      </div>
+
+      <div class="fg" style="margin-top:10px;">
+        <label class="fl">Observações para o cliente</label>
+        <textarea class="fta" id="qNotes" placeholder="Diagnóstico, causa do problema, garantia..."></textarea>
+      </div>
+
+      <div class="fsec">Resumo</div>
+      <div class="footer-box" id="footerBox"></div>
+
+      <div id="qErr" style="margin-top:12px;"></div>
+      <button class="btn bp" id="savebtn" style="margin-top:14px;" onclick="doSave()">✓ Salvar Orçamento</button>
+    </div>
+  </div>`;
+  renderPartList(); updateFooter();
+}
+
+function partFormHtml(){return `
+  <div class="part-form">
+    <div class="fg"><label class="fl">Nome da peça *</label>
+      <input class="fi" id="pName" placeholder="Ex: Capacitor 25µF"></div>
+    <div class="fr" style="margin-top:8px;">
+      <div class="fg"><label class="fl">Quantidade</label>
+        <input class="fi" id="pQty" type="number" value="1" step="1" min="1" inputmode="numeric"></div>
+      <div class="fg"><label class="fl">Unidade</label>
+        <select class="fs" id="pUnit">${UNITS.map(u=>`<option>${u}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div class="fg" style="margin-top:8px;"><label class="fl">Custo da peça R$</label>
+      <input class="fi" id="pCost" type="number" value="0" step="1" min="0" inputmode="decimal"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;">
+      <button class="btn bs" onclick="showForm=false;draw()">Cancelar</button>
+      <button class="btn bp" onclick="addPart()">+ Adicionar</button>
+    </div>
+  </div>`;}
+
+function addPart(){
+  const name=document.getElementById('pName')?.value?.trim();
+  const qty =parseFloat(document.getElementById('pQty')?.value)||1;
+  const unit=document.getElementById('pUnit')?.value||'unidade';
+  const cost=parseFloat(document.getElementById('pCost')?.value)||0;
+  if(!name){toast('Informe o nome da peça','err');return;}
+  const margin=(financeConfig?.parts_margin||30)/100;
+  const price=cost*(1+margin);
+  parts.push({id:Date.now(),name,qty,unit,cost,price,total_cost:cost*qty,total_price:price*qty});
+  showForm=false; draw();
+}
+
+function removePart(id){parts=parts.filter(p=>p.id!==id);draw();}
+
+function renderPartList(){
+  const el=document.getElementById('partList');
+  if(!el) return;
+  if(!parts.length){el.innerHTML='<div style="font-size:12px;color:var(--txt2);text-align:center;padding:8px 0 12px;">Nenhuma peça adicionada</div>';return;}
+  el.innerHTML=parts.map(p=>`
+    <div class="part-item">
+      <div>
+        <div style="font-size:13px;font-weight:600;">${p.name}</div>
+        <div style="font-size:11px;color:var(--txt2);">${p.qty} ${p.unit} · custo ${fmt(p.total_cost)}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="text-align:right;">
+          <div style="font-size:11px;color:var(--txt2);">${fmt(p.total_cost)}</div>
+          <div style="font-size:13px;font-weight:700;color:var(--acc);">${fmt(p.total_price)}</div>
+        </div>
+        <button class="part-del" onclick="removePart(${p.id})">✕</button>
+      </div>
+    </div>`).join('');
+}
+
+function toggleSection(s){
+  if(s==='gas'){
+    const b=document.getElementById('gasBody');
+    const chk=document.getElementById('chkGas');
+    if(!b||!chk) return;
+    chk.checked=!chk.checked;
+    b.style.display=chk.checked?'block':'none';
+  } else {
+    const b=document.getElementById('n2Body');
+    const chk=document.getElementById('chkN2');
+    if(!b||!chk) return;
+    chk.checked=!chk.checked;
+    b.style.display=chk.checked?'block':'none';
+  }
+  updateFooter();
+}
+
+function calcTotals(){
+  const c   = financeConfig||{};
+  const lh  = parseFloat(document.getElementById('qLh')?.value)||0;
+  const labor = lh*(c.hourly_rate||150);
+  const partsCost  = parts.reduce((s,p)=>s+p.total_cost,0);
+  const partsPrice = parts.reduce((s,p)=>s+p.total_price,0);
+
+  const hasGas = document.getElementById('chkGas')?.checked;
+  const gasKg  = parseFloat(document.getElementById('gasKg')?.value)||0;
+  const gasCpk = parseFloat(document.getElementById('gasCostKg')?.value)||0;
+  const gasCost  = hasGas ? gasKg*gasCpk : 0;
+  const gasPrice = hasGas ? gasCost*(1+(c.gas_margin||25)/100) : 0;
+
+  const hasN2  = document.getElementById('chkN2')?.checked;
+  const n2Cost = hasN2 ? parseFloat(document.getElementById('n2Cost')?.value)||0 : 0;
+  const n2Price= hasN2 ? n2Cost*(1+(c.gas_margin||25)/100) : 0;
+
+  const disc   = parseFloat(document.getElementById('discVal')?.value)||0;
+  const subTotal = labor+partsPrice+gasPrice+n2Price;
+  const minFee = c.min_corrective_fee||250;
+  const preDisc = Math.max(subTotal, minFee);
+  const final  = Math.max(0, preDisc-disc);
+  const totalCost = labor+partsCost+gasCost+n2Cost;
+  return {labor,partsCost,partsPrice,gasCost,gasPrice,n2Cost,n2Price,disc,final,totalCost,profit:final-totalCost};
+}
+
+function updateFooter(){
+  const t=calcTotals();
+  const el=document.getElementById('footerBox'); if(!el) return;
+  el.innerHTML=`
+    <div class="f-row"><span class="f-lbl">Custo total peças</span><span style="font-weight:600;">${fmt(t.partsCost)}</span></div>
+    <div class="f-row"><span class="f-lbl">Peças c/ margem</span><span style="font-weight:600;">${fmt(t.partsPrice)}</span></div>
+    ${t.gasCost>0?`<div class="f-row"><span class="f-lbl">Gás c/ margem</span><span style="font-weight:600;">${fmt(t.gasPrice)}</span></div>`:''}
+    ${t.n2Cost>0?`<div class="f-row"><span class="f-lbl">Nitrogênio c/ margem</span><span style="font-weight:600;">${fmt(t.n2Price)}</span></div>`:''}
+    <div class="f-row"><span class="f-lbl">Hora técnica</span><span style="font-weight:600;">${fmt(t.labor)}</span></div>
+    <div class="f-row"><span class="f-lbl">Desconto</span><span style="font-weight:600;color:var(--err);">— ${fmt(t.disc)}</span></div>
+    <div class="f-row"><span style="font-weight:700;">Total para o cliente</span><span class="f-total">${fmt(t.final)}</span></div>
+    <div class="f-row"><span class="f-lbl">Lucro estimado</span>
+      <span class="f-profit" style="color:${t.profit>=0?'var(--ok)':'var(--err)'};">${fmt(t.profit)}</span>
+    </div>`;
+}
+
+function syncDisc(src){
+  const t=calcTotals();
+  if(src==='pct'){
+    const pct=parseFloat(document.getElementById('discPct')?.value)||0;
+    const el=document.getElementById('discVal'); if(el) el.value=(t.final*pct/100).toFixed(2);
+  } else {
+    const dv=parseFloat(document.getElementById('discVal')?.value)||0;
+    const el=document.getElementById('discPct'); if(el) el.value=t.final>0?(dv/t.final*100).toFixed(1):'0';
+  }
+  updateFooter();
+}
+
+async function doSave(){
+  const desc=val('qDesc');
+  clearErr('qErr');
+  if(!desc){showErr('qErr','Preencha a descrição dos serviços');return;}
+  setBtnLoading('savebtn',true,'Salvar Orçamento');
+
+  const c=financeConfig||{};
+  const t=calcTotals();
+  const notes=val('qNotes');
+  const hasGas=document.getElementById('chkGas')?.checked;
+  const hasN2 =document.getElementById('chkN2')?.checked;
+
+  const year=new Date().getFullYear();
+  const {data:lq}=await sb.from('quotes').select('sequence').eq('owner_id',currentUser.id).eq('year',year).order('sequence',{ascending:false}).limit(1).single();
+  const seq=Math.max((lq?.sequence||0)+1,100);
+
+  const {data:q,error:qe}=await sb.from('quotes').insert([{
+    owner_id:currentUser.id, customer_id:parseInt(custId),
+    year, sequence:seq, version:1, status:'draft',
+    discount:t.disc, total_cost:t.totalCost, total_price:t.final,
+    estimated_profit:t.profit, notes, params_snapshot:c,
+    created_by_id:currentUser.id,
+  }]).select('id').single();
+
+  if(qe){showErr('qErr','Erro: '+qe.message);setBtnLoading('savebtn',false,'Salvar Orçamento');return;}
+
+  // Salvar item corretivo
+  const corrItem={
+    quote_id:q.id, owner_id:currentUser.id,
+    part_cost:t.partsCost,
+    has_gas:hasGas,
+    gas_type:hasGas?(document.getElementById('gasType')?.value||null):null,
+    gas_kg:hasGas?(parseFloat(document.getElementById('gasKg')?.value)||0):0,
+    gas_cost_kg:hasGas?(parseFloat(document.getElementById('gasCostKg')?.value)||0):0,
+    has_nitrogen:hasN2,
+    nitrogen_m3:hasN2?(parseFloat(document.getElementById('n2M3')?.value)||0):0,
+    nitrogen_cost:hasN2?(parseFloat(document.getElementById('n2Cost')?.value)||0):0,
+  };
+  await sb.from('quote_corrective_items').insert([corrItem]);
+
+  // Peças
+  if(parts.length){
+    await sb.from('quote_installation_items').insert(parts.map(p=>({
+      quote_id:q.id, owner_id:currentUser.id,
+      name:p.name, quantity:p.qty, unit:p.unit,
+      unit_cost:p.cost, margin_pct:c.parts_margin||30,
+    })));
+  }
+
+  await sb.from('quote_items').insert([{
+    owner_id:currentUser.id, quote_id:q.id,
+    service_type:'corrective', description:desc,
+    difficulty:'medium', labor_hours:parseFloat(document.getElementById('qLh')?.value)||0,
+    parts_cost:t.partsCost, gas_cost:t.gasCost,
+    created_by_id:currentUser.id,
+  }]);
+
+  toast('Orçamento salvo!','ok');
+  setTimeout(()=>nav('orcamento.html?id='+q.id),800);
+}
+</script>
+</body>
+</html>

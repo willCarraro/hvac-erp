@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"><meta name="mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0F1923"><title>MeuGestHVAC — Notificações</title><link rel="stylesheet" href="css/style.css"><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+.notif-item{background:var(--bg2);border:1px solid var(--bdr);border-radius:12px;padding:13px 14px;margin-bottom:9px;cursor:pointer;transition:border-color .2s;}
+.notif-item.unread{border-color:var(--acc);background:rgba(0,191,255,.04);}
+.notif-item:active{opacity:.85;}
+.notif-ico{font-size:22px;flex-shrink:0;}
+.notif-body{flex:1;}
+.notif-title{font-size:13px;font-weight:700;}
+.notif-msg{font-size:12px;color:var(--txt2);margin-top:3px;line-height:1.5;}
+.notif-time{font-size:10px;color:var(--txt2);margin-top:5px;}
+.notif-dot{width:8px;height:8px;border-radius:50%;background:var(--acc);flex-shrink:0;margin-top:4px;}
+</style>
+</head>
+<body><div id="app"><div class="loading"><div class="spin"></div><p>Carregando...</p></div></div>
+<script src="js/config.js"></script><script src="js/auth.js"></script>
+<script>
+let notifs=[];
+(async()=>{
+  const ok=await requireAuth();if(!ok)return;
+  await checkAndGenerate();
+  await loadNotifs();
+  draw();
+})();
+
+async function loadNotifs(){
+  const{data}=await sb.from('user_notifications').select('*').eq('owner_id',currentUser.id).order('created_at',{ascending:false}).limit(50);
+  notifs=data||[];
+}
+
+async function checkAndGenerate(){
+  const cfg=financeConfig||{};
+  const now=new Date();
+  const today=now.toISOString().split('T')[0];
+  const toInsert=[];
+
+  // Orçamentos rascunho parados
+  const draftDays=cfg.quote_draft_alert_days||3;
+  const draftLimit=new Date(now-draftDays*86400000).toISOString();
+  const{data:drafts}=await sb.from('quotes').select('id,sequence,customers(name)').eq('owner_id',currentUser.id).eq('status','draft').lt('updated_at',draftLimit);
+  drafts?.forEach(q=>{
+    toInsert.push({owner_id:currentUser.id,type:'quote_draft',title:'📝 Orçamento parado',message:`Orçamento #${q.sequence} (${q.customers?.name||'cliente'}) está em rascunho há mais de ${draftDays} dias sem movimentação.`,entity:'quote',entity_id:q.id});
+  });
+
+  // Orçamentos enviados sem resposta
+  const sentDays=cfg.quote_sent_alert_days||5;
+  const sentLimit=new Date(now-sentDays*86400000).toISOString();
+  const{data:sents}=await sb.from('quotes').select('id,sequence,customers(name)').eq('owner_id',currentUser.id).eq('status','sent').lt('updated_at',sentLimit);
+  sents?.forEach(q=>{
+    toInsert.push({owner_id:currentUser.id,type:'quote_sent',title:'📤 Aguardando resposta',message:`Orçamento #${q.sequence} (${q.customers?.name||'cliente'}) foi enviado há mais de ${sentDays} dias sem resposta.`,entity:'quote',entity_id:q.id});
+  });
+
+  // Orçamentos aprovados sem agendar
+  const appDays=cfg.quote_approved_alert_days||3;
+  const appLimit=new Date(now-appDays*86400000).toISOString();
+  const{data:appds}=await sb.from('quotes').select('id,sequence,customers(name)').eq('owner_id',currentUser.id).eq('status','approved').lt('updated_at',appLimit);
+  appds?.forEach(q=>{
+    toInsert.push({owner_id:currentUser.id,type:'quote_approved',title:'✅ Aprovado sem agendar',message:`Orçamento #${q.sequence} (${q.customers?.name||'cliente'}) foi aprovado há mais de ${appDays} dias. Agende o serviço!`,entity:'quote',entity_id:q.id});
+  });
+
+  // Contas a receber vencendo
+  const recvDays=cfg.receivable_due_alert_days||2;
+  const recvLimit=new Date(now.getTime()+recvDays*86400000).toISOString().split('T')[0];
+  const{data:recvs}=await sb.from('accounts_receivable').select('id,amount_due,due_date,services(customer_snapshot)').eq('owner_id',currentUser.id).neq('status','received').lte('due_date',recvLimit).gte('due_date',today);
+  recvs?.forEach(r=>{
+    const name=r.services?.customer_snapshot?.name||'cliente';
+    toInsert.push({owner_id:currentUser.id,type:'receivable_due',title:'💰 Recebimento vencendo',message:`Conta a receber de ${name} no valor de R$ ${parseFloat(r.amount_due).toFixed(2).replace('.',',')} vence em ${new Date(r.due_date+'T12:00').toLocaleDateString('pt-BR')}.`,entity:'receivable',entity_id:r.id});
+  });
+
+  // Contas a pagar vencendo
+  const payDays=cfg.payable_due_alert_days||2;
+  const payLimit=new Date(now.getTime()+payDays*86400000).toISOString().split('T')[0];
+  const{data:pays}=await sb.from('accounts_payable').select('id,amount,description,due_date').eq('owner_id',currentUser.id).eq('is_paid',false).lte('due_date',payLimit).gte('due_date',today);
+  pays?.forEach(p=>{
+    toInsert.push({owner_id:currentUser.id,type:'payable_due',title:'💳 Despesa vencendo',message:`${p.description} no valor de R$ ${parseFloat(p.amount).toFixed(2).replace('.',',')} vence em ${new Date(p.due_date+'T12:00').toLocaleDateString('pt-BR')}.`,entity:'payable',entity_id:p.id});
+  });
+
+  // Agenda do próximo dia
+  const tomorrow=new Date(now.getTime()+86400000).toISOString().split('T')[0];
+  const{data:apps}=await sb.from('appointments').select('id,scheduled_time,services(customer_snapshot)').eq('owner_id',currentUser.id).eq('scheduled_date',tomorrow);
+  if(apps?.length){
+    toInsert.push({owner_id:currentUser.id,type:'schedule_reminder',title:'📅 Serviços amanhã',message:`Você tem ${apps.length} serviço(s) agendado(s) para amanhã. Prepare os materiais!`,entity:'appointment',entity_id:null});
+  }
+
+  if(toInsert.length){
+    await sb.from('user_notifications').insert(toInsert);
+  }
+}
+
+function draw(){
+  const unread=notifs.filter(n=>!n.is_read).length;
+  const typeIco={quote_draft:'📝',quote_sent:'📤',quote_approved:'✅',receivable_due:'💰',payable_due:'💳',schedule_reminder:'📅',multi_receivable:'⚠️'};
+  document.getElementById('app').innerHTML=`
+  <div class="page">
+    <div class="hdr">
+      <button class="back-btn" onclick="history.back()">←</button>
+      <h1>🔔 Notificações</h1>
+      ${unread?`<button class="hdr-btn" onclick="markAllRead()" title="Marcar todas como lidas">✓✓</button>`:''}
+    </div>
+    ${unread?`<div style="padding:10px 14px 0;"><div style="background:rgba(0,191,255,.1);border:1px solid var(--acc);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--acc);">${unread} não lida(s) — toque para marcar como lida</div></div>`:''}
+    <div style="padding:12px 14px 24px;">
+      ${notifs.length?notifs.map(n=>`
+        <div class="notif-item ${n.is_read?'':'unread'}" onclick="markRead(${n.id},${n.entity_id},\'${n.entity||''}\')">
+          <div style="display:flex;gap:12px;align-items:flex-start;">
+            <span class="notif-ico">${typeIco[n.type]||'🔔'}</span>
+            <div class="notif-body">
+              <div class="notif-title">${n.title}</div>
+              <div class="notif-msg">${n.message}</div>
+              <div class="notif-time">${fdatetime(n.created_at)}</div>
+            </div>
+            ${!n.is_read?'<div class="notif-dot"></div>':''}
+          </div>
+        </div>`).join(''):
+        '<div class="empty"><div class="eico">🔔</div><h3>Tudo em dia!</h3><p>Nenhuma notificação pendente</p></div>'}
+    </div>
+  </div>`;
+}
+
+async function markRead(id,entityId,entity){
+  await sb.from('user_notifications').update({is_read:true}).eq('id',id);
+  // Navegar para entidade
+  if(entity==='quote'&&entityId)nav('orcamento.html?id='+entityId);
+  else if(entity==='receivable'||entity==='payable')nav('financeiro.html');
+  else if(entity==='appointment')nav('agenda.html');
+  else{await loadNotifs();draw();}
+}
+
+async function markAllRead(){
+  await sb.from('user_notifications').update({is_read:true}).eq('owner_id',currentUser.id).eq('is_read',false);
+  toast('Todas marcadas como lidas','ok');
+  await loadNotifs();draw();
+}
+</script></body></html>

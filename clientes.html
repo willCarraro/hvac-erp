@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"><meta name="mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0F1923"><title>MeuGestHVAC — Clientes</title><link rel="stylesheet" href="css/style.css"><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script></head>
+<body><div id="app"><div class="loading"><div class="spin"></div><p>Carregando...</p></div></div>
+<script src="js/config.js"></script><script src="js/auth.js"></script>
+<script>
+let allC=[];
+(async()=>{
+  const ok=await requireAuth();if(!ok)return;
+  document.getElementById('app').innerHTML=`<div class="page"><div class="hdr"><h1>👥 Clientes</h1></div><div class="srch"><span class="srch-ico">🔍</span><input id="cSearch" placeholder="Buscar por nome, telefone, cidade..." oninput="filterList(this.value)"></div><div class="sec-hdr"><div class="sec-title">Todos os clientes</div><span id="cCount" style="font-size:12px;color:var(--txt2);"></span></div><div id="cList"><div class="loading" style="min-height:200px;"><div class="spin"></div></div></div><button class="fab" onclick="nav('cliente-novo.html')">+</button></div>${renderNav('clientes')}`;
+  const{data}=await sb.from('customers').select('id,name,company,phone,email,city,state,level,is_active').eq('owner_id',currentUser.id).eq('is_active',true).order('name');
+  allC=data||[];renderList(allC);
+})();
+function filterList(q){renderList(q?allC.filter(c=>c.name?.toLowerCase().includes(q.toLowerCase())||(c.phone||'').includes(q)||(c.city||'').toLowerCase().includes(q.toLowerCase())):allC);}
+function renderList(list){
+  const el=document.getElementById('cList'),cnt=document.getElementById('cCount');
+  if(cnt)cnt.textContent=list.length+' cliente(s)';
+  if(!list.length){el.innerHTML='<div class="empty"><div class="eico">👥</div><h3>Nenhum cliente</h3><p>Toque em + para cadastrar</p></div>';return;}
+  const levelIco={bronze:'🥉',silver:'🥈',gold:'🥇',vip:'💎'};
+  el.innerHTML=list.map(c=>`<div class="li" onclick="nav('cliente-detalhe.html?id=${c.id}')"><div class="av">${initials(c.name)}</div><div class="li-info"><div class="li-name">${levelIco[c.level]||''} ${c.name}</div><div class="li-sub">${[c.phone,c.city?(c.city+(c.state?'/'+c.state:'')):''].filter(Boolean).join(' · ')||'—'}</div></div><span class="li-arr">›</span></div>`).join('');
+}
+</script></body></html>

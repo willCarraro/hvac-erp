@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"><meta name="mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0F1923"><title>MeuGestHVAC — Orçamento</title><link rel="stylesheet" href="css/style.css"><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script></head>
+<body><div id="app"><div class="loading"><div class="spin"></div><p>Carregando...</p></div></div>
+<script src="js/config.js"></script><script src="js/auth.js"></script>
+<script>
+const params=new URLSearchParams(window.location.search);
+const quoteId=params.get('id');
+(async()=>{
+  if(!quoteId){nav('orcamentos.html');return;}
+  const ok=await requireAuth();if(!ok)return;
+  await renderPage();
+})();
+async function renderPage(){
+  const [{data:q},{data:items},{data:logs}]=await Promise.all([
+    sb.from('quotes').select('*,customers(id,name,phone,email)').eq('id',quoteId).single(),
+    sb.from('quote_items').select('*').eq('quote_id',quoteId),
+    sb.from('status_logs').select('*').eq('quote_id',quoteId).order('changed_at'),
+  ]);
+  if(!q){toast('Orçamento não encontrado','err');nav('orcamentos.html');return;}
+  const actions={
+    draft:[{l:'📤 Marcar como Enviado',s:'sent',c:'bp'},{l:'✏️ Editar',a:'edit',c:'bs'}],
+    pending:[{l:'📤 Marcar como Enviado',s:'sent',c:'bp'}],
+    to_send:[{l:'📤 Marcar como Enviado',s:'sent',c:'bp'}],
+    sent:[{l:'✅ Aprovado pelo cliente',s:'approved',c:'bok'},{l:'✗ Cliente recusou',s:'rejected',c:'berr'}],
+    approved:[{l:'📅 Agendar serviço',s:'scheduled',c:'bp'}],
+    scheduled:[{l:'🔧 Iniciar execução',s:'finished',c:'bp'}],
+    finished:[],rejected:[{l:'🔄 Reabrir rascunho',s:'draft',c:'bs'}],
+  };
+  const btns=(actions[q.status]||[]).map(a=>a.a==='edit'?`<button class="btn ${a.c}" onclick="nav('orcamento-novo.html?edit=${q.id}')">${a.l}</button>`:`<button class="btn ${a.c}" onclick="doStatus('${a.s}','${a.l}')">${a.l}</button>`).join('');
+  const itemsHtml=items?.length?items.map(i=>`<div class="card"><div style="font-size:14px;font-weight:600;margin-bottom:4px;">${i.description}</div><div style="font-size:11px;color:var(--txt2);">${stLabel(i.service_type)} · ${dfLabel(i.difficulty)}${i.is_urgent?' · ⚡ Urgente':''}</div><div style="font-size:11px;color:var(--txt2);margin-top:4px;">MO: ${i.labor_hours}h · Mat: ${fmt(i.material_cost)} · Gás: ${fmt(i.gas_cost||0)} · Peças: ${fmt(i.parts_cost||0)}</div></div>`).join(''):'';
+  const tlHtml=logs?.length?`<div class="sec-hdr"><div class="sec-title">Histórico</div></div><div class="timeline">${logs.map(l=>`<div class="tl-item"><div class="tl-dot ok">✓</div><div class="tl-body"><div class="tl-label">${sLabel(l.to_status)}</div><div class="tl-date">${fdatetime(l.changed_at)}</div>${l.notes?`<div class="tl-note">${l.notes}</div>`:''}</div></div>`).join('')}</div>`:'';
+  document.getElementById('app').innerHTML=`
+  <div class="page">
+    <div class="hdr"><button class="back-btn" onclick="nav('orcamentos.html')">←</button><h1>Orçamento #${q.sequence}/${q.year}</h1></div>
+    <div style="padding:14px 14px 0;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <span class="${sBadgeClass(q.status)}" style="font-size:12px;padding:5px 12px;">${sLabel(q.status)}</span>
+        <span style="font-size:11px;color:var(--txt2);">v${q.version} · ${fdate(q.created_at)}</span>
+      </div>
+      <div class="card" style="cursor:pointer;" onclick="nav('cliente-detalhe.html?id=${q.customers?.id}')">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div style="width:40px;height:40px;border-radius:50%;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--acc);">${initials(q.customers?.name)}</div>
+          <div style="flex:1;"><div style="font-size:15px;font-weight:600;">${q.customers?.name||'—'}</div>${q.customers?.phone?`<a class="tel" href="tel:${q.customers.phone}" style="font-size:12px;">${q.customers.phone}</a>`:''}</div>
+          <span style="color:var(--txt2);">›</span>
+        </div>
+      </div>
+    </div>
+    ${itemsHtml?`<div class="sec-hdr"><div class="sec-title">Itens</div></div><div style="padding:0 14px;">${itemsHtml}</div>`:''}
+    <div class="sec-hdr"><div class="sec-title">Resumo financeiro</div></div>
+    <div style="padding:0 14px;">
+      <div class="qsum">
+        <div class="qrow"><span>Custo estimado</span><span>${fmt(q.total_cost)}</span></div>
+        ${q.discount?`<div class="qrow"><span>Desconto</span><span style="color:var(--err);">— ${fmt(q.discount)}</span></div>`:''}
+        <div class="qrow qtotal"><span>TOTAL</span><span class="qval">${fmt(q.total_price)}</span></div>
+        <div class="qrow" style="margin-top:4px;"><span style="color:var(--txt2);">Lucro estimado</span><span style="color:${q.estimated_profit>=0?'var(--ok)':'var(--err)'};">${fmt(q.estimated_profit)}</span></div>
+      </div>
+    </div>
+    ${q.notes?`<div style="padding:14px;font-size:13px;color:var(--txt2);line-height:1.7;">${q.notes}</div>`:''}
+    ${tlHtml}
+    ${btns?`<div class="sec-hdr"><div class="sec-title">Ações</div></div><div style="padding:0 14px 14px;display:flex;flex-direction:column;gap:10px;">${btns}</div>`:''}
+    <div style="padding:0 14px 24px;">
+      <button class="btn berr btn-sm" style="width:auto;" onclick="doDelete()">🗑️ Excluir orçamento</button>
+    </div>
+  </div>`;
+}
+async function doStatus(newStatus,label){
+  if(!confirm('Confirmar: "'+label+'"?'))return;
+  const{data:q}=await sb.from('quotes').select('status').eq('id',quoteId).single();
+  await sb.from('quotes').update({status:newStatus,updated_at:new Date().toISOString()}).eq('id',quoteId);
+  await sb.from('status_logs').insert([{quote_id:parseInt(quoteId),owner_id:currentUser.id,from_status:q?.status||null,to_status:newStatus,changed_by:currentUser.id,changed_at:new Date().toISOString()}]);
+  toast('Status atualizado!','ok');
+  await renderPage();
+}
+async function doDelete(){
+  if(!confirm('Excluir este orçamento? Esta ação não pode ser desfeita.'))return;
+  await sb.from('quote_items').delete().eq('quote_id',quoteId);
+  await sb.from('status_logs').delete().eq('quote_id',quoteId);
+  await sb.from('quotes').delete().eq('id',quoteId);
+  toast('Orçamento excluído','ok');
+  setTimeout(()=>nav('orcamentos.html'),800);
+}
+</script></body></html>
