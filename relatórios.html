@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<meta name="mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0F1923">
+<title>MeuGestHVAC — Relatórios</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+.period-bar{display:flex;gap:6px;padding:10px 14px;overflow-x:auto;-webkit-overflow-scrolling:touch;}
+.period-bar::-webkit-scrollbar{display:none;}
+.pchip{flex-shrink:0;padding:6px 14px;border-radius:20px;border:1.5px solid var(--bdr);background:var(--bg2);color:var(--txt2);font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;}
+.pchip.on{border-color:var(--acc);background:rgba(0,191,255,.12);color:var(--acc);}
+.year-nav{display:flex;align-items:center;gap:10px;padding:8px 14px;}
+.year-nav button{background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;color:var(--txt);padding:5px 12px;cursor:pointer;font-size:15px;}
+.year-nav span{font-size:15px;font-weight:700;flex:1;text-align:center;}
+.kpi-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 14px;}
+.kpi{background:var(--bg2);border:1px solid var(--bdr);border-radius:12px;padding:14px;}
+.kpi-lbl{font-size:10px;color:var(--txt2);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;}
+.kpi-val{font-size:20px;font-weight:800;}
+.kpi-sub{font-size:10px;color:var(--txt2);margin-top:3px;}
+.rep-card{background:var(--bg2);border:1px solid var(--bdr);border-radius:12px;padding:14px;margin-bottom:10px;}
+.rep-title{font-size:11px;font-weight:700;color:var(--txt2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;}
+.bar-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+.bar-lbl{font-size:11px;color:var(--txt2);width:90px;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.bar-track{flex:1;background:var(--bg3);border-radius:4px;height:7px;overflow:hidden;}
+.bar-fill{height:100%;border-radius:4px;transition:width .5s ease;}
+.bar-val{font-size:11px;font-weight:700;min-width:66px;text-align:right;flex-shrink:0;}
+.print-btn{display:flex;align-items:center;gap:8px;background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:11px 16px;cursor:pointer;font-size:14px;font-weight:600;color:var(--txt);width:100%;margin-top:10px;}
+.print-btn:active{border-color:var(--acc);color:var(--acc);}
+@media print{
+  .bnav,.hdr button,.print-btn,.period-bar,.year-nav button{display:none!important;}
+  body{background:white;color:#111;}
+  .kpi,.rep-card{border:1px solid #ccc!important;background:white!important;}
+  .kpi-lbl,.bar-lbl,.rep-title{color:#666!important;}
+}
+</style>
+</head>
+<body>
+<div id="app"><div class="loading"><div class="spin"></div><p>Carregando...</p></div></div>
+<script src="js/config.js"></script><script src="js/auth.js"></script>
+<script>
+const MONTHS=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+const MONTHS_FULL=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+const CAT_LABELS={material:'Material',fuel:'Combustível',tools:'Ferramentas',rent:'Aluguel',luz:'Luz',internet:'Internet',labor:'MO 3°',other:'Outros'};
+const PM_LABELS={pix:'PIX',cash:'Dinheiro',debit:'Débito',credit:'Crédito',bank_slip:'Boleto',transfer:'Transferência'};
+
+let period='month', selMonth=new Date().getMonth(), selYear=new Date().getFullYear();
+let rData={quotes:[],payments:[],payables:[]};
+
+(async()=>{
+  const ok=await requireAuth(); if(!ok)return;
+  await loadData(); draw();
+})();
+
+async function loadData(){
+  let from,to;
+  const now=new Date();
+  if(period==='today'){from=to=now.toISOString().split('T')[0];}
+  else if(period==='month'){from=`${selYear}-${String(selMonth+1).padStart(2,'0')}-01`;to=new Date(selYear,selMonth+1,0).toISOString().split('T')[0];}
+  else{from=`${selYear}-01-01`;to=`${selYear}-12-31`;}
+
+  const[q,p,py]=await Promise.all([
+    sb.from('quotes').select('id,status,total_price,total_cost,estimated_profit,created_at').eq('owner_id',currentUser.id).gte('created_at',from+'T00:00:00').lte('created_at',to+'T23:59:59'),
+    sb.from('payments').select('amount,paid_at,payment_method').eq('owner_id',currentUser.id).gte('paid_at',from).lte('paid_at',to),
+    sb.from('accounts_payable').select('amount,is_paid,paid_at,category').eq('owner_id',currentUser.id).eq('is_paid',true).gte('paid_at',from).lte('paid_at',to),
+  ]);
+  rData={quotes:q.data||[],payments:p.data||[],payables:py.data||[]};
+}
+
+function draw(){
+  const totalRecv=rData.payments.reduce((s,p)=>s+(p.amount||0),0);
+  const totalPay=rData.payables.reduce((s,p)=>s+(p.amount||0),0);
+  const lucroLiq=totalRecv-totalPay;
+  const totalOrc=rData.quotes.length;
+  const apprQ=rData.quotes.filter(q=>['approved','scheduled','finished'].includes(q.status));
+  const conversion=totalOrc>0?Math.round(apprQ.length/totalOrc*100):0;
+  const ticketMed=apprQ.length>0?apprQ.reduce((s,q)=>s+(q.total_price||0),0)/apprQ.length:0;
+  const margin=totalRecv>0?Math.round(lucroLiq/totalRecv*100):0;
+
+  const catTotals={};
+  rData.payables.forEach(p=>{catTotals[p.category]=(catTotals[p.category]||0)+(p.amount||0);});
+  const maxCat=Math.max(...Object.values(catTotals),1);
+
+  const pmTotals={};
+  rData.payments.forEach(p=>{pmTotals[p.payment_method]=(pmTotals[p.payment_method]||0)+(p.amount||0);});
+  const maxPm=Math.max(...Object.values(pmTotals),1);
+
+  const periodLabel=period==='today'?'Hoje':period==='month'?`${MONTHS_FULL[selMonth]} ${selYear}`:`Ano ${selYear}`;
+
+  document.getElementById('app').innerHTML=`
+  <div class="page">
+    <div class="hdr"><h1>📊 Relatórios</h1></div>
+
+    <!-- Navegação de período -->
+    <div class="period-bar">
+      <div class="pchip ${period==='today'?'on':''}" onclick="setPeriod('today')">Hoje</div>
+      ${MONTHS.map((m,i)=>`<div class="pchip ${period==='month'&&selMonth===i?'on':''}" onclick="setPeriod('month',${i})">${m}</div>`).join('')}
+      <div class="pchip ${period==='year'?'on':''}" onclick="setPeriod('year')">Ano</div>
+    </div>
+
+    <!-- Navegação de ano -->
+    <div class="year-nav">
+      <button onclick="changeYear(-1)">←</button>
+      <span>${selYear}</span>
+      <button onclick="changeYear(1)">→</button>
+    </div>
+
+    <div class="sec-hdr"><div class="sec-title">${periodLabel}</div></div>
+
+    <!-- KPIs -->
+    <div class="kpi-grid">
+      <div class="kpi"><div class="kpi-lbl">Receita confirmada</div><div class="kpi-val" style="color:var(--ok);">${fmt(totalRecv)}</div><div class="kpi-sub">${rData.payments.length} pagamento(s)</div></div>
+      <div class="kpi"><div class="kpi-lbl">Despesas pagas</div><div class="kpi-val" style="color:var(--err);">${fmt(totalPay)}</div><div class="kpi-sub">${rData.payables.length} despesa(s)</div></div>
+      <div class="kpi"><div class="kpi-lbl">Lucro líquido</div><div class="kpi-val" style="color:${lucroLiq>=0?'var(--acc)':'var(--err)'};">${fmt(lucroLiq)}</div><div class="kpi-sub">${lucroLiq>=0?'✓ Positivo':'⚠️ Negativo'}</div></div>
+      <div class="kpi"><div class="kpi-lbl">Margem</div><div class="kpi-val" style="color:${margin>=0?'var(--acc)':'var(--err)'};">${margin}%</div><div class="kpi-sub">Lucro / Receita</div></div>
+      <div class="kpi"><div class="kpi-lbl">Orçamentos</div><div class="kpi-val">${totalOrc}</div><div class="kpi-sub">Conversão: ${conversion}%</div></div>
+      <div class="kpi"><div class="kpi-lbl">Ticket médio</div><div class="kpi-val" style="font-size:15px;">${fmt(ticketMed)}</div><div class="kpi-sub">${apprQ.length} aprovado(s)</div></div>
+    </div>
+
+    <div style="padding:14px 14px 0;">
+      ${Object.keys(catTotals).length?`<div class="rep-card">
+        <div class="rep-title">Despesas por categoria</div>
+        ${Object.entries(catTotals).sort((a,b)=>b[1]-a[1]).map(([cat,v])=>`
+          <div class="bar-row">
+            <span class="bar-lbl">${CAT_LABELS[cat]||cat}</span>
+            <div class="bar-track"><div class="bar-fill" style="width:${Math.round(v/maxCat*100)}%;background:var(--err);"></div></div>
+            <span class="bar-val" style="color:var(--err);">${fmt(v)}</span>
+          </div>`).join('')}
+      </div>`:''}
+
+      ${Object.keys(pmTotals).length?`<div class="rep-card">
+        <div class="rep-title">Receita por forma de pagamento</div>
+        ${Object.entries(pmTotals).sort((a,b)=>b[1]-a[1]).map(([pm,v])=>`
+          <div class="bar-row">
+            <span class="bar-lbl">${PM_LABELS[pm]||pm}</span>
+            <div class="bar-track"><div class="bar-fill" style="width:${Math.round(v/maxPm*100)}%;background:var(--acc);"></div></div>
+            <span class="bar-val" style="color:var(--acc);">${fmt(v)}</span>
+          </div>`).join('')}
+      </div>`:''}
+
+      ${!rData.payments.length&&!rData.payables.length?'<div class="empty" style="padding-top:24px;"><div class="eico">📊</div><h3>Sem dados no período</h3><p>Selecione outro período ou registre movimentações financeiras</p></div>':''}
+
+      <!-- Botão imprimir -->
+      <button class="print-btn" onclick="printReport()">
+        🖨️ Imprimir / Salvar como PDF
+        <span style="font-size:11px;color:var(--txt2);margin-left:auto;">${periodLabel}</span>
+      </button>
+    </div>
+  </div>
+  ${renderNav('relatorios')}`;
+}
+
+async function setPeriod(p,m){
+  period=p;
+  if(p==='month'&&m!==undefined) selMonth=m;
+  await loadData(); draw();
+}
+
+async function changeYear(dir){
+  selYear+=dir;
+  await loadData(); draw();
+}
+
+function printReport(){
+  window.print();
+}
+</script>
+</body>
+</html>
