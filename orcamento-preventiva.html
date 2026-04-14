@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<meta name="mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0F1923">
+<title>MeuGestHVAC — Preventiva</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+.add-btn{background:rgba(0,191,255,.1);border:1.5px dashed var(--acc);border-radius:10px;padding:12px;width:100%;color:var(--acc);font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:10px;}
+.eq-form{background:var(--bg3);border-radius:12px;padding:14px;margin-bottom:10px;}
+.eq-item{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:10px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;}
+.eq-del{background:none;border:none;color:var(--err);font-size:16px;cursor:pointer;}
+.footer-card{background:var(--bg3);border-radius:12px;padding:14px;}
+.frow{display:flex;justify-content:space-between;align-items:center;padding:6px 0;font-size:13px;border-bottom:1px solid var(--bdr);}
+.frow:last-child{border-bottom:none;}
+.frow-lbl{color:var(--txt2);}
+.f-total-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0 6px;border-top:2px solid var(--bdr);margin-top:4px;}
+.f-total-lbl{font-size:16px;font-weight:800;}
+.f-total-val{font-size:22px;font-weight:800;color:var(--acc);}
+.disc-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.type-tabs{display:flex;gap:6px;margin-top:4px;}
+.type-tab{flex:1;padding:8px 4px;border-radius:8px;border:1.5px solid var(--bdr);background:var(--bg2);color:var(--txt2);font-size:12px;font-weight:700;cursor:pointer;text-align:center;transition:all .15s;}
+.type-tab.sel{border-color:var(--acc);background:rgba(0,191,255,.1);color:var(--acc);}
+.diff-tabs{display:flex;gap:6px;margin-top:4px;}
+.diff-tab{flex:1;padding:8px 4px;border-radius:8px;border:1.5px solid var(--bdr);background:var(--bg2);color:var(--txt2);font-size:11px;font-weight:700;cursor:pointer;text-align:center;transition:all .15s;}
+.diff-tab.sel{border-color:var(--acc);background:rgba(0,191,255,.1);color:var(--acc);}
+.preview-box{background:var(--bg2);border-radius:8px;padding:8px 12px;margin-top:8px;font-size:12px;color:var(--txt2);}
+.eq-client-select{display:none;}
+.eq-client-select.visible{display:block;}
+</style>
+</head>
+<body>
+<div id="app"><div class="loading"><div class="spin"></div><p>Carregando...</p></div></div>
+<script src="js/config.js"></script><script src="js/auth.js"></script><script src="js/calc.js"></script>
+<script>
+const params=new URLSearchParams(window.location.search);
+const custId=params.get('customer_id');
+const BTUS=[9000,12000,18000,24000,30000,36000,48000,60000];
+const AC_TYPES=[{v:'hi_wall',l:'Hi Wall'},{v:'piso_teto',l:'Piso Teto'},{v:'cassete',l:'Cassete'}];
+const DIFFS=[{v:'easy',l:'Fácil'},{v:'medium',l:'Médio'},{v:'hard',l:'Difícil'}];
+
+let customer=null, equipments=[], showForm=false;
+let selType='hi_wall', selDiff='medium';
+let clientEquipments=[];
+
+(async()=>{
+  const ok=await requireAuth(); if(!ok)return;
+  if(!custId){nav('orcamento-novo.html');return;}
+  const[{data:c},{data:eqs}]=await Promise.all([
+    sb.from('customers').select('id,name').eq('id',custId).single(),
+    sb.from('equipments').select('id,equipment_type,capacity_btu,brand,model,location_note,evaporator_model').eq('customer_id',custId).eq('is_active',true),
+  ]);
+  customer=c; clientEquipments=eqs||[];
+  draw();
+})();
+
+function getBasePrice(type){
+  const cfg=financeConfig||{};
+  return {hi_wall:cfg.hiwall_base||250,piso_teto:cfg.pisoteto_base||380,cassete:cfg.cassete_base||450}[type]||250;
+}
+function getMult(diff){
+  const cfg=financeConfig||{};
+  return {easy:cfg.mult_easy||1,medium:cfg.mult_medium||1.3,hard:cfg.mult_hard||1.7}[diff]||1.3;
+}
+
+function draw(){
+  document.getElementById('app').innerHTML=`
+  <div class="page">
+    <div class="hdr"><button class="back-btn" onclick="history.back()">←</button><h1>🛡️ Preventiva</h1></div>
+    <div class="fp">
+      <div style="background:rgba(0,191,255,.08);border:1.5px solid var(--acc);border-radius:10px;padding:10px 14px;margin-bottom:14px;">
+        <div style="font-size:10px;color:var(--txt2);text-transform:uppercase;letter-spacing:.6px;">Cliente</div>
+        <div style="font-size:15px;font-weight:700;margin-top:2px;">${customer?.name||'—'}</div>
+      </div>
+
+      <div class="fg"><label class="fl">Descrição *</label>
+        <input class="fi" id="qDesc" placeholder="Ex: Manutenção preventiva — 3 splits"></div>
+
+      <!-- Equipamentos do cliente (opcional) -->
+      ${clientEquipments.length?`
+      <div class="fg" style="margin-top:10px;">
+        <label class="fl">Equipamento do cliente (opcional)</label>
+        <select class="fs" id="clientEq">
+          <option value="">— Sem vínculo específico —</option>
+          ${clientEquipments.map(e=>`<option value="${e.id}">${e.location_note||e.brand||'Equip.'} ${e.capacity_btu?e.capacity_btu.toLocaleString()+' BTU':''}</option>`).join('')}
+        </select>
+      </div>`:''}
+
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:16px 0 8px;">
+        <div style="font-size:14px;font-weight:700;">🧊 Equipamentos a manutenuar</div>
+      </div>
+      <div id="eqList"></div>
+      ${showForm?eqFormHtml():`<button class="add-btn" onclick="showForm=true;draw()">+ Adicionar equipamento</button>`}
+
+      <div class="fsec">Desconto</div>
+      <div class="disc-grid">
+        <div class="fg"><label class="fl">Em %</label>
+          <input class="fi" id="discPct" type="number" value="0" step="1" min="0" max="100" inputmode="decimal" oninput="syncDisc('pct')"></div>
+        <div class="fg"><label class="fl">Em R$</label>
+          <input class="fi" id="discVal" type="number" value="0" step="10" min="0" inputmode="decimal" oninput="syncDisc('val')"></div>
+      </div>
+
+      <div class="fg" style="margin-top:10px;"><label class="fl">Observações</label>
+        <textarea class="fta" id="qNotes" placeholder="Periodicidade recomendada, garantia..."></textarea></div>
+
+      <div class="fsec">Resumo financeiro</div>
+      <div class="footer-card" id="footerCard"></div>
+
+      <div id="qErr" style="margin-top:12px;"></div>
+      <button class="btn bp" id="savebtn" style="margin-top:14px;" onclick="doSave()">✓ Salvar Orçamento</button>
+    </div>
+  </div>`;
+  renderEqList(); updateFooter();
+}
+
+function eqFormHtml(){
+  const base=getBasePrice(selType);
+  const mult=getMult(selDiff);
+  const previewUnit=roundMoney(base*mult);
+  const qty=parseInt(document.getElementById('eQtyPreview')?.value)||1;
+  return`<div class="eq-form">
+    <div class="fg"><label class="fl">Tipo de equipamento</label>
+      <div class="type-tabs">
+        ${AC_TYPES.map(t=>`<div class="type-tab ${selType===t.v?'sel':''}" onclick="selType='${t.v}';refreshForm()">${t.l}</div>`).join('')}
+      </div>
+    </div>
+    <div class="fr" style="margin-top:10px;">
+      <div class="fg"><label class="fl">Capacidade BTU</label>
+        <select class="fs" id="eBtu">${BTUS.map(b=>`<option value="${b}">${b.toLocaleString()}</option>`).join('')}</select></div>
+      <div class="fg"><label class="fl">Quantidade *</label>
+        <input class="fi" id="eQtyPreview" type="number" value="1" min="1" step="1" inputmode="numeric" oninput="refreshForm()"></div>
+    </div>
+    <div class="fg" style="margin-top:10px;"><label class="fl">Dificuldade</label>
+      <div class="diff-tabs">
+        ${DIFFS.map(d=>`<div class="diff-tab ${selDiff===d.v?'sel':''}" onclick="selDiff='${d.v}';refreshForm()">${d.l}</div>`).join('')}
+      </div>
+    </div>
+    <div class="preview-box">
+      <div>Valor base: <strong>${fmt(base)}</strong> × dificuldade <strong>${mult}</strong> = <strong style="color:var(--acc);">${fmt(previewUnit)}/un.</strong></div>
+      <div style="margin-top:4px;">Total (${qty||1}×): <strong style="color:var(--acc);font-size:14px;">${fmt(previewUnit*(qty||1))}</strong></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;">
+      <button class="btn bs" onclick="showForm=false;selType='hi_wall';selDiff='medium';draw()">Cancelar</button>
+      <button class="btn bp" onclick="addEq()">+ Adicionar</button>
+    </div>
+  </div>`;
+}
+
+function refreshForm(){
+  // Ler valores atuais antes de redesenhar
+  const qty=document.getElementById('eQtyPreview')?.value||'1';
+  const btu=document.getElementById('eBtu')?.value||'9000';
+  draw();
+  // Restaurar valores
+  setTimeout(()=>{
+    const qEl=document.getElementById('eQtyPreview');if(qEl)qEl.value=qty;
+    const bEl=document.getElementById('eBtu');if(bEl)bEl.value=btu;
+  },0);
+}
+
+function addEq(){
+  const btu=parseInt(document.getElementById('eBtu')?.value)||9000;
+  const quantity=parseInt(document.getElementById('eQtyPreview')?.value)||1;
+  if(quantity<1){toast('Quantidade deve ser pelo menos 1','err');return;}
+  const base=getBasePrice(selType);
+  const mult=getMult(selDiff);
+  const unitPrice=roundMoney(base*mult);
+  const total=roundMoney(unitPrice*quantity);
+  const typeLabel=AC_TYPES.find(t=>t.v===selType)?.l||selType;
+  const diffLabel=DIFFS.find(d=>d.v===selDiff)?.l||selDiff;
+  equipments.push({id:Date.now(),type:selType,typeLabel,btu,quantity,diffLabel,difficulty:selDiff,base_price:base,unitPrice,total});
+  showForm=false; selType='hi_wall'; selDiff='medium'; draw();
+}
+
+function removeEq(id){equipments=equipments.filter(e=>e.id!==id);draw();}
+
+function renderEqList(){
+  const el=document.getElementById('eqList'); if(!el)return;
+  if(!equipments.length){el.innerHTML='<div style="font-size:12px;color:var(--txt2);text-align:center;padding:6px 0 10px;">Nenhum equipamento adicionado</div>';return;}
+  el.innerHTML=equipments.map(e=>`
+    <div class="eq-item">
+      <div>
+        <div style="font-size:13px;font-weight:600;">${e.typeLabel} · ${(e.btu||0).toLocaleString()} BTU · ${e.quantity}×</div>
+        <div style="font-size:11px;color:var(--txt2);">${e.diffLabel} · ${fmt(e.unitPrice)}/un.</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:14px;font-weight:700;color:var(--acc);">${fmt(e.total)}</span>
+        <button class="eq-del" onclick="removeEq(${e.id})">✕</button>
+      </div>
+    </div>`).join('');
+}
+
+function updateFooter(){
+  const discPct=parseFloat(document.getElementById('discPct')?.value)||0;
+  const discVal=parseFloat(document.getElementById('discVal')?.value)||0;
+  // Passa quantity (não qty) para o motor de cálculo
+  const r=calcPreventive({
+    cfg:financeConfig,
+    equipments:equipments.map(e=>({...e,quantity:e.quantity})),
+    discount_pct:discPct,
+    discount_val:discVal,
+  });
+  const el=document.getElementById('footerCard'); if(!el)return;
+  el.innerHTML=`
+    <div class="frow"><span class="frow-lbl">Equipamentos (${equipments.length} tipo(s) · ${equipments.reduce((s,e)=>s+e.quantity,0)} un.)</span><span style="font-weight:600;">${fmt(r.eqSubtotal)}</span></div>
+    <div class="frow"><span class="frow-lbl">Desconto</span><span style="font-weight:600;color:var(--err);">— ${fmt(r.disc)}</span></div>
+    <div class="f-total-row">
+      <span class="f-total-lbl">Total para o cliente</span>
+      <span class="f-total-val">${fmt(r.final)}</span>
+    </div>
+    <div class="frow"><span class="frow-lbl">Lucro estimado</span>
+      <span style="font-weight:600;color:${r.profit>=0?'var(--ok)':'var(--err)'};">${fmt(r.profit)} (${r.margin_pct}%)</span>
+    </div>`;
+}
+
+function syncDisc(src){
+  const sub=equipments.reduce((s,e)=>s+e.total,0);
+  if(src==='pct'){const pct=parseFloat(document.getElementById('discPct')?.value)||0;const el=document.getElementById('discVal');if(el)el.value=(sub*pct/100).toFixed(2);}
+  else{const dv=parseFloat(document.getElementById('discVal')?.value)||0;const el=document.getElementById('discPct');if(el)el.value=sub>0?(dv/sub*100).toFixed(1):'0';}
+  updateFooter();
+}
+
+async function doSave(){
+  const desc=val('qDesc'); clearErr('qErr');
+  if(!desc){showErr('qErr','Preencha a descrição');return;}
+  if(!equipments.length){showErr('qErr','Adicione pelo menos um equipamento');return;}
+  setBtnLoading('savebtn',true,'Salvar Orçamento');
+
+  const discPct=parseFloat(document.getElementById('discPct')?.value)||0;
+  const discVal=parseFloat(document.getElementById('discVal')?.value)||0;
+  const notes=val('qNotes');
+  const clientEqId=document.getElementById('clientEq')?.value||null;
+
+  const r=calcPreventive({
+    cfg:financeConfig,
+    equipments:equipments.map(e=>({...e,quantity:e.quantity})),
+    discount_pct:discPct, discount_val:discVal,
+  });
+
+  const year=new Date().getFullYear();
+  const seq=await nextQuoteSequence(sb,currentUser.id,year);
+
+  const{data:q,error:qe}=await sb.from('quotes').insert([{
+    owner_id:currentUser.id, customer_id:parseInt(custId),
+    year, sequence:seq, version:1, status:'draft',
+    discount:r.disc, total_cost:r.cost, total_price:r.final,
+    estimated_profit:r.profit, notes,
+    params_snapshot:{...financeConfig,discount_pct:discPct},
+    created_by_id:currentUser.id,
+  }]).select('id').single();
+
+  if(qe){showErr('qErr','Erro: '+qe.message);setBtnLoading('savebtn',false,'Salvar Orçamento');return;}
+
+  await sb.from('quote_preventive_items').insert(equipments.map(e=>({
+    quote_id:q.id, owner_id:currentUser.id,
+    ac_type:e.type, capacity_btu:e.btu,
+    quantity:e.quantity, difficulty:e.difficulty, base_price:e.base_price,
+  })));
+
+  await sb.from('quote_items').insert([{
+    owner_id:currentUser.id, quote_id:q.id,
+    service_type:'preventive', description:desc,
+    difficulty:'medium', labor_hours:0, material_cost:0,
+    created_by_id:currentUser.id,
+  }]);
+
+  toast('Orçamento salvo!','ok');
+  setTimeout(()=>nav('orcamento.html?id='+q.id),800);
+}
+</script>
+</body>
+</html>

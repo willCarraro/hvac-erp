@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<meta name="mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0F1923">
+<title>MeuGestHVAC — Login</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+.auth-wrap{min-height:100vh;display:flex;flex-direction:column;padding:0 0 32px;overflow-y:auto;}
+.auth-hero{background:linear-gradient(160deg,#0F1923 0%,#1A2535 60%,#243044 100%);padding:48px 28px 32px;text-align:center;border-bottom:1px solid #2D3F55;}
+.logo-mark{display:inline-flex;align-items:center;gap:12px;margin-bottom:14px;}
+.logo-ice{font-size:40px;filter:drop-shadow(0 0 12px rgba(0,191,255,.6));}
+.logo-text{text-align:left;}
+.logo-main{font-size:26px;font-weight:800;color:#E8EDF2;letter-spacing:.5px;line-height:1;}
+.logo-main span{color:#00BFFF;}
+.logo-sub{font-size:10px;color:#8FA3B1;letter-spacing:2px;text-transform:uppercase;margin-top:3px;}
+.auth-tagline{font-size:13px;color:#8FA3B1;margin-top:4px;}
+.tab-wrap{padding:16px 20px 0;}
+.tabs{display:flex;background:#1A2535;border-radius:10px;padding:4px;gap:4px;}
+.tab{flex:1;padding:10px;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:none;color:#8FA3B1;transition:all .2s;}
+.tab.on{background:#00BFFF;color:#0F1923;}
+.auth-body{padding:20px 20px 0;}
+.form-section{display:flex;flex-direction:column;gap:12px;}
+.step-dots{display:flex;gap:6px;margin-bottom:16px;}
+.step-dot-bar{flex:1;height:3px;border-radius:2px;background:#2D3F55;transition:background .3s;}
+.step-dot-bar.active{background:#00BFFF;}
+.step-label{font-size:14px;font-weight:700;color:#E8EDF2;margin-bottom:4px;}
+.step-sub{font-size:12px;color:#8FA3B1;margin-bottom:10px;}
+.recover-link{text-align:center;font-size:13px;color:#8FA3B1;margin-top:14px;cursor:pointer;}
+.recover-link span{color:#00BFFF;font-weight:600;}
+</style>
+</head>
+<body>
+<div id="app"><div class="loading"><div class="spin"></div><p>Carregando...</p></div></div>
+<script src="js/config.js"></script>
+<script>
+let mode='login', regStep=1;
+
+(async()=>{
+  const{data:{session}}=await sb.auth.getSession();
+  if(session){window.location.href='home.html';return;}
+  draw();
+})();
+
+function draw(){
+  document.getElementById('app').innerHTML=`
+  <div class="auth-wrap">
+    <div class="auth-hero">
+      <div class="logo-mark">
+        <div class="logo-ice">❄️</div>
+        <div class="logo-text">
+          <div class="logo-main">Meu<span>Gest</span>HVAC</div>
+          <div class="logo-sub">Sistema de Gestão HVAC</div>
+        </div>
+      </div>
+      <div class="auth-tagline">Orçamentos · Agenda · Financeiro · Relatórios</div>
+    </div>
+    <div class="tab-wrap">
+      <div class="tabs">
+        <button class="tab ${mode==='login'?'on':''}" onclick="setMode('login')">Entrar</button>
+        <button class="tab ${mode==='register'?'on':''}" onclick="setMode('register')">Criar conta</button>
+      </div>
+    </div>
+    <div class="auth-body">
+      ${mode==='login'?loginHtml():mode==='register'?regHtml():recoverHtml()}
+    </div>
+  </div>`;
+}
+
+function setMode(m){mode=m;regStep=1;draw();}
+
+function loginHtml(){return`
+  <div class="form-section">
+    <div class="step-label" style="margin-top:4px;">Bem-vindo de volta 👋</div>
+    <div class="fg"><label class="fl">E-mail</label>
+      <input class="fi" id="le" type="email" placeholder="seu@email.com" autocomplete="email"></div>
+    <div class="fg"><label class="fl">Senha</label>
+      <input class="fi" id="lp" type="password" placeholder="••••••••" autocomplete="current-password"></div>
+    <div id="lerr"></div>
+    <button class="btn bp" id="lbtn" onclick="doLogin()">Entrar</button>
+    <div class="recover-link" onclick="setMode('recover')">Esqueci minha senha — <span>Recuperar</span></div>
+  </div>`;}
+
+function regHtml(){return`
+  <div>
+    <div class="step-dots">
+      <div class="step-dot-bar ${regStep>=1?'active':''}"></div>
+      <div class="step-dot-bar ${regStep>=2?'active':''}"></div>
+    </div>
+    ${regStep===1?reg1():reg2()}
+  </div>`;}
+
+function reg1(){return`
+  <div class="form-section">
+    <div class="step-label">Dados de acesso — 1 de 2</div>
+    <div class="fg"><label class="fl">Nome completo *</label>
+      <input class="fi" id="rn" type="text" placeholder="Seu nome"></div>
+    <div class="fg"><label class="fl">E-mail *</label>
+      <input class="fi" id="re" type="email" placeholder="seu@email.com"></div>
+    <div class="fr">
+      <div class="fg"><label class="fl">Senha *</label>
+        <input class="fi" id="rp" type="password" placeholder="mín. 6 chars"></div>
+      <div class="fg"><label class="fl">Confirmar *</label>
+        <input class="fi" id="rp2" type="password" placeholder="repetir"></div>
+    </div>
+    <div id="r1err"></div>
+    <button class="btn bp" onclick="nextStep()">Próximo →</button>
+  </div>`;}
+
+function reg2(){return`
+  <div class="form-section">
+    <div class="step-label">Dados da empresa — 2 de 2</div>
+    <div class="step-sub">Aparecem nos seus orçamentos e relatórios</div>
+    <div class="fg"><label class="fl">Nome da empresa *</label>
+      <input class="fi" id="compName" placeholder="Ex: ARCLASS CLIMATIZAÇÃO"></div>
+    <div class="fg"><label class="fl">CNPJ / CPF</label>
+      <input class="fi" id="compCnpj" placeholder="00.000.000/0000-00"></div>
+    <div class="fr">
+      <div class="fg"><label class="fl">Telefone</label>
+        <input class="fi" id="compPhone" type="tel" placeholder="(41) 99999-0000"></div>
+      <div class="fg"><label class="fl">Cidade</label>
+        <input class="fi" id="compCity" placeholder="Curitiba"></div>
+    </div>
+    <div class="fg"><label class="fl">Endereço</label>
+      <input class="fi" id="compAddr" placeholder="Rua, número, bairro"></div>
+    <div id="r2err"></div>
+    <button class="btn bp" id="rbtn" onclick="doRegister()">✓ Criar minha conta</button>
+    <button class="btn bs" style="margin-top:8px;" onclick="regStep=1;draw()">← Voltar</button>
+  </div>`;}
+
+function recoverHtml(){return`
+  <div class="form-section">
+    <div class="step-label">Recuperar senha</div>
+    <div class="step-sub">Enviaremos um link para seu e-mail</div>
+    <div class="fg"><label class="fl">E-mail da conta</label>
+      <input class="fi" id="recEmail" type="email" placeholder="seu@email.com"></div>
+    <div id="recErr"></div>
+    <button class="btn bp" id="recBtn" onclick="doRecover()">📧 Enviar link</button>
+    <div class="recover-link" onclick="setMode('login')">← Voltar ao login</div>
+  </div>`;}
+
+async function doLogin(){
+  const e=val('le'),p=document.getElementById('lp')?.value;
+  clearErr('lerr');
+  if(!e||!p){showErr('lerr','Preencha e-mail e senha');return;}
+  setBtnLoading('lbtn',true,'Entrar');
+  const{error}=await sb.auth.signInWithPassword({email:e,password:p});
+  if(error){showErr('lerr','E-mail ou senha incorretos');setBtnLoading('lbtn',false,'Entrar');return;}
+  window.location.href='home.html';
+}
+
+function nextStep(){
+  const n=val('rn'),e=val('re'),p=document.getElementById('rp')?.value,p2=document.getElementById('rp2')?.value;
+  clearErr('r1err');
+  if(!n){showErr('r1err','Nome é obrigatório');return;}
+  if(!e){showErr('r1err','E-mail é obrigatório');return;}
+  if(!p||p.length<6){showErr('r1err','Senha deve ter no mínimo 6 caracteres');return;}
+  if(p!==p2){showErr('r1err','As senhas não coincidem');return;}
+  window._reg={name:n,email:e,password:p};
+  regStep=2;draw();
+}
+
+async function doRegister(){
+  const compName=val('compName');
+  clearErr('r2err');
+  if(!compName){showErr('r2err','Nome da empresa é obrigatório');return;}
+  setBtnLoading('rbtn',true,'Criar minha conta');
+  const{name,email,password}=window._reg||{};
+  if(!email){setMode('register');return;}
+
+  // Passa dados via metadata para o trigger criar o perfil
+  const{data,error}=await sb.auth.signUp({
+    email,
+    password,
+    options:{
+      data:{
+        full_name: name,
+        company_name: compName,
+      }
+    }
+  });
+
+  if(error){showErr('r2err','Erro: '+error.message);setBtnLoading('rbtn',false,'Criar minha conta');return;}
+
+  const uid=data.user?.id;
+  if(!uid){showErr('r2err','Erro ao criar conta. Tente novamente.');setBtnLoading('rbtn',false,'Criar minha conta');return;}
+
+  // Aguardar trigger executar
+  await new Promise(r=>setTimeout(r,1500));
+
+  // Atualizar dados da empresa (trigger cria com nome básico, aqui completamos)
+  await sb.from('user_company').upsert([{
+    user_id:uid,
+    company_name:compName,
+    cnpj:val('compCnpj'),
+    phone:val('compPhone'),
+    city:val('compCity'),
+    address:val('compAddr'),
+    updated_at:new Date().toISOString(),
+  }],{onConflict:'user_id'});
+
+  window.location.href='home.html';
+}
+
+async function doRecover(){
+  const e=val('recEmail');
+  clearErr('recErr');
+  if(!e){showErr('recErr','Informe o e-mail');return;}
+  setBtnLoading('recBtn',true,'Enviar link');
+  const{error}=await sb.auth.resetPasswordForEmail(e,{redirectTo:window.location.origin+'/index.html'});
+  setBtnLoading('recBtn',false,'Enviar link');
+  if(error){showErr('recErr','Erro: '+error.message);return;}
+  document.getElementById('recErr').innerHTML='<div class="alert alert-ok">✓ Link enviado! Verifique seu e-mail.</div>';
+}
+</script>
+</body>
+</html>

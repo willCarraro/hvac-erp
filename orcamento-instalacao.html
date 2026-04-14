@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<meta name="mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0F1923">
+<title>MeuGestHVAC — Instalação</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+.add-btn{background:rgba(0,191,255,.1);border:1.5px dashed var(--acc);border-radius:10px;padding:12px;width:100%;color:var(--acc);font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:10px;}
+.mat-form{background:var(--bg3);border-radius:12px;padding:14px;margin-bottom:10px;}
+.mat-item{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:10px 12px;margin-bottom:6px;}
+.mat-top{display:flex;justify-content:space-between;align-items:flex-start;}
+.mat-del{background:none;border:none;color:var(--err);font-size:16px;cursor:pointer;}
+.mat-prices{display:flex;gap:14px;margin-top:5px;font-size:12px;}
+.price-cost{color:var(--txt2);}
+.price-sell{color:var(--acc);font-weight:700;}
+.footer-card{background:var(--bg3);border-radius:12px;padding:14px;}
+.frow{display:flex;justify-content:space-between;padding:6px 0;font-size:13px;border-bottom:1px solid var(--bdr);}
+.frow:last-child{border-bottom:none;}
+.frow-lbl{color:var(--txt2);}
+.f-total-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0 6px;border-top:2px solid var(--bdr);margin-top:4px;}
+.f-total-val{font-size:22px;font-weight:800;color:var(--acc);}
+.disc-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.units-scroll{display:flex;gap:6px;overflow-x:auto;padding:4px 0;-webkit-overflow-scrolling:touch;}
+.units-scroll::-webkit-scrollbar{display:none;}
+.unit-chip{flex-shrink:0;padding:5px 12px;border-radius:20px;border:1.5px solid var(--bdr);background:var(--bg2);color:var(--txt2);font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;}
+.unit-chip.sel{border-color:var(--acc);background:rgba(0,191,255,.12);color:var(--acc);}
+</style>
+</head>
+<body>
+<div id="app"><div class="loading"><div class="spin"></div><p>Carregando...</p></div></div>
+<script src="js/config.js"></script><script src="js/auth.js"></script><script src="js/calc.js"></script>
+<script>
+const params=new URLSearchParams(window.location.search);
+const custId=params.get('customer_id');
+const UNITS=['metro','unidade','conjunto','kg','litro','par','rolo','m²','hora'];
+
+let customer=null, materials=[], showForm=false, selUnit='unidade';
+
+(async()=>{
+  const ok=await requireAuth(); if(!ok)return;
+  if(!custId){nav('orcamento-novo.html');return;}
+  const{data}=await sb.from('customers').select('id,name').eq('id',custId).single();
+  customer=data; draw();
+})();
+
+function draw(){
+  const cfg=financeConfig||{};
+  document.getElementById('app').innerHTML=`
+  <div class="page">
+    <div class="hdr"><button class="back-btn" onclick="history.back()">←</button><h1>🔧 Instalação</h1></div>
+    <div class="fp">
+      <div style="background:rgba(0,191,255,.08);border:1.5px solid var(--acc);border-radius:10px;padding:10px 14px;margin-bottom:14px;">
+        <div style="font-size:10px;color:var(--txt2);text-transform:uppercase;letter-spacing:.6px;">Cliente</div>
+        <div style="font-size:15px;font-weight:700;margin-top:2px;">${customer?.name||'—'}</div>
+      </div>
+      <div class="fg"><label class="fl">Descrição do serviço *</label>
+        <input class="fi" id="qDesc" placeholder="Ex: Instalação Split 12.000 BTU — Sala"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:16px 0 8px;">
+        <div style="font-size:14px;font-weight:700;">📦 Materiais</div>
+        <div style="font-size:11px;color:var(--txt2);">Margem: ${cfg.material_margin||30}%</div>
+      </div>
+      <div id="matList"></div>
+      ${showForm?matFormHtml():`<button class="add-btn" onclick="showForm=true;draw()">+ Adicionar material</button>`}
+      <div class="fsec">Mão de obra</div>
+      <div style="font-size:12px;color:var(--txt2);margin-bottom:8px;">Valor cobrado ao cliente (entra como receita/lucro)</div>
+      <div class="fg"><label class="fl">Valor da mão de obra R$</label>
+        <input class="fi" id="qLabor" type="number" value="0" step="10" min="0" inputmode="decimal" oninput="updateFooter()"></div>
+      <div style="font-size:11px;color:var(--txt2);margin-top:4px;">Referência: ${fmt(cfg.hourly_rate||150)}/h</div>
+      <div class="fsec">Desconto</div>
+      <div class="disc-grid">
+        <div class="fg"><label class="fl">Em %</label>
+          <input class="fi" id="discPct" type="number" value="0" step="1" min="0" max="100" inputmode="decimal" oninput="syncDisc('pct')"></div>
+        <div class="fg"><label class="fl">Em R$</label>
+          <input class="fi" id="discVal" type="number" value="0" step="10" min="0" inputmode="decimal" oninput="syncDisc('val')"></div>
+      </div>
+      <div class="fg" style="margin-top:10px;"><label class="fl">Observações</label>
+        <textarea class="fta" id="qNotes" placeholder="Prazo, garantia, condições..."></textarea></div>
+      <div class="fsec">Resumo financeiro</div>
+      <div class="footer-card" id="footerCard"></div>
+      <div id="qErr" style="margin-top:12px;"></div>
+      <button class="btn bp" id="savebtn" style="margin-top:14px;" onclick="doSave()">✓ Salvar Orçamento</button>
+    </div>
+  </div>`;
+  renderMatList(); updateFooter();
+}
+
+function matFormHtml(){return`
+  <div class="mat-form">
+    <div class="fg"><label class="fl">Nome do material *</label>
+      <input class="fi" id="mName" placeholder="Ex: Cobre ¼ × 3/8" autocomplete="off"></div>
+    <div class="fr" style="margin-top:8px;">
+      <div class="fg"><label class="fl">Quantidade</label>
+        <input class="fi" id="mQty" type="number" value="1" step="0.5" min="0" inputmode="decimal"></div>
+      <div class="fg"><label class="fl">Custo unitário R$</label>
+        <input class="fi" id="mCost" type="number" value="0" step="1" min="0" inputmode="decimal"></div>
+    </div>
+    <div class="fg" style="margin-top:8px;"><label class="fl">Unidade</label>
+      <div class="units-scroll">
+        ${UNITS.map(u=>`<div class="unit-chip ${u===selUnit?'sel':''}" onclick="selUnit='${u}';rerenderUnits()">${u}</div>`).join('')}
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--txt2);margin-top:4px;">Margem: <strong style="color:var(--acc);">${financeConfig?.material_margin||30}%</strong></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;">
+      <button class="btn bs" onclick="showForm=false;selUnit='unidade';draw()">Cancelar</button>
+      <button class="btn bp" onclick="addMat()">+ Adicionar</button>
+    </div>
+  </div>`;}
+
+function rerenderUnits(){
+  const el=document.querySelector('.units-scroll'); if(!el)return;
+  el.innerHTML=UNITS.map(u=>`<div class="unit-chip ${u===selUnit?'sel':''}" onclick="selUnit='${u}';rerenderUnits()">${u}</div>`).join('');
+}
+
+function addMat(){
+  const name=document.getElementById('mName')?.value?.trim();
+  const qty=parseFloat(document.getElementById('mQty')?.value)||1;
+  const cost=parseFloat(document.getElementById('mCost')?.value)||0;
+  if(!name){toast('Informe o nome do material','err');return;}
+  const mg=financeConfig?.material_margin||30;
+  materials.push({id:Date.now(),name,qty,unit:selUnit,unit_cost:cost,margin_pct:mg,
+    total_cost:roundMoney(cost*qty),total_sell:roundMoney(cost*(1+mg/100)*qty)});
+  showForm=false; selUnit='unidade'; draw();
+}
+
+function removeMat(id){materials=materials.filter(m=>m.id!==id);draw();}
+
+function renderMatList(){
+  const el=document.getElementById('matList'); if(!el)return;
+  if(!materials.length){el.innerHTML='<div style="font-size:12px;color:var(--txt2);text-align:center;padding:6px 0 10px;">Nenhum material adicionado</div>';return;}
+  el.innerHTML=materials.map(m=>`
+    <div class="mat-item">
+      <div class="mat-top"><span style="font-size:13px;font-weight:600;flex:1;">${m.name}</span><button class="mat-del" onclick="removeMat(${m.id})">✕</button></div>
+      <div style="font-size:11px;color:var(--txt2);margin-top:3px;">${m.qty} ${m.unit}</div>
+      <div class="mat-prices"><span class="price-cost">Custo: ${fmt(m.total_cost)}</span><span class="price-sell">Venda: ${fmt(m.total_sell)}</span></div>
+    </div>`).join('');
+}
+
+function getCalcData(){
+  return{cfg:financeConfig,materials,labor_value:parseFloat(document.getElementById('qLabor')?.value)||0,
+    discount_pct:parseFloat(document.getElementById('discPct')?.value)||0,
+    discount_val:parseFloat(document.getElementById('discVal')?.value)||0};
+}
+
+function updateFooter(){
+  const r=calcInstallation(getCalcData());
+  const el=document.getElementById('footerCard'); if(!el)return;
+  el.innerHTML=`
+    <div class="frow"><span class="frow-lbl">Custo materiais</span><span>${fmt(r.matCost)}</span></div>
+    <div class="frow"><span class="frow-lbl">Materiais c/ margem</span><span style="color:var(--acc);">${fmt(r.matSell)}</span></div>
+    <div class="frow"><span class="frow-lbl">Mão de obra (receita)</span><span>${fmt(r.labor)}</span></div>
+    <div class="frow"><span class="frow-lbl">Desconto</span><span style="color:var(--err);">— ${fmt(r.disc)}</span></div>
+    <div class="frow"><span class="frow-lbl">Custo total</span><span>${fmt(r.cost)}</span></div>
+    <div class="f-total-row"><span style="font-size:16px;font-weight:800;">Total para o cliente</span><span class="f-total-val">${fmt(r.final)}</span></div>
+    <div class="frow"><span class="frow-lbl">Lucro estimado</span>
+      <span style="font-weight:600;color:${r.profit>=0?'var(--ok)':'var(--err)'};">${fmt(r.profit)} (${r.margin_pct}%)</span></div>`;
+}
+
+function syncDisc(src){
+  const d=getCalcData();
+  const sub=d.materials.reduce((s,m)=>s+m.total_sell,0)+(d.labor_value||0);
+  if(src==='pct'){const pct=parseFloat(document.getElementById('discPct')?.value)||0;const el=document.getElementById('discVal');if(el)el.value=(sub*pct/100).toFixed(2);}
+  else{const dv=parseFloat(document.getElementById('discVal')?.value)||0;const el=document.getElementById('discPct');if(el)el.value=sub>0?(dv/sub*100).toFixed(1):'0';}
+  updateFooter();
+}
+
+async function doSave(){
+  const desc=val('qDesc'); clearErr('qErr');
+  if(!desc){showErr('qErr','Preencha a descrição');return;}
+  setBtnLoading('savebtn',true,'Salvar Orçamento');
+  const d=getCalcData();
+  const r=calcInstallation(d);
+  const notes=val('qNotes');
+  const year=new Date().getFullYear();
+  const seq=await nextQuoteSequence(sb,currentUser.id,year);
+  const{data:q,error:qe}=await sb.from('quotes').insert([{
+    owner_id:currentUser.id,customer_id:parseInt(custId),year,sequence:seq,version:1,status:'draft',
+    discount:r.disc,total_cost:r.cost,total_price:r.final,estimated_profit:r.profit,notes,
+    params_snapshot:{...financeConfig,labor_value:d.labor_value},created_by_id:currentUser.id,
+  }]).select('id').single();
+  if(qe){showErr('qErr','Erro: '+qe.message);setBtnLoading('savebtn',false,'Salvar Orçamento');return;}
+  if(materials.length){
+    await sb.from('quote_installation_items').insert(materials.map(m=>({
+      quote_id:q.id,owner_id:currentUser.id,name:m.name,quantity:m.qty,unit:m.unit,unit_cost:m.unit_cost,margin_pct:m.margin_pct,
+    })));
+    // Gerar despesa de material automaticamente
+    if(r.matCost>0){
+      await sb.from('accounts_payable').insert([{
+        owner_id:currentUser.id,category:'material',recurrence:'variable',
+        description:`Materiais — ${desc}`,amount:r.matCost,is_paid:false,
+        created_at:new Date().toISOString(),updated_at:new Date().toISOString(),
+      }]);
+    }
+  }
+  await sb.from('quote_items').insert([{
+    owner_id:currentUser.id,quote_id:q.id,service_type:'installation',description:desc,
+    difficulty:'medium',labor_hours:0,material_cost:r.matCost,created_by_id:currentUser.id,
+  }]);
+  toast('Orçamento salvo!','ok');
+  setTimeout(()=>nav('orcamento.html?id='+q.id),800);
+}
+</script>
+</body>
+</html>
