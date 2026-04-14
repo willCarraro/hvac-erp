@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<meta name="mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0F1923">
+<title>MeuGestHVAC — Agenda</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+.cal-nav{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;}
+.cal-nav h3{font-size:15px;font-weight:700;}
+.cal-nav button{background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;color:var(--txt);padding:6px 14px;cursor:pointer;font-size:16px;}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;padding:0 10px;}
+.cal-head{text-align:center;font-size:10px;font-weight:700;color:var(--txt2);padding:5px 0;text-transform:uppercase;}
+.cal-day{text-align:center;padding:6px 2px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;min-height:38px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:2px;}
+.cal-day.today{background:rgba(0,191,255,.15);border:1.5px solid var(--acc);color:var(--acc);}
+.cal-day.sel{background:var(--acc)!important;color:#0F1923!important;}
+.cal-day.free{background:rgba(46,204,113,.12);color:var(--ok);}
+.cal-day.partial{background:rgba(243,156,18,.12);color:var(--warn);}
+.cal-day.full{background:rgba(231,76,60,.12);color:var(--err);}
+.cal-day.holiday::after{content:'';position:absolute;top:3px;right:3px;width:5px;height:5px;border-radius:50%;background:var(--warn);}
+.cal-day{position:relative;}
+.cal-day.other{opacity:.25;}
+.day-dot{width:5px;height:5px;border-radius:50%;background:currentColor;margin-top:1px;}
+.legend{display:flex;gap:12px;padding:8px 14px;font-size:11px;color:var(--txt2);flex-wrap:wrap;}
+.legend span{display:flex;align-items:center;gap:4px;}
+.legend .dot{width:8px;height:8px;border-radius:50%;}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:400;display:flex;align-items:flex-end;justify-content:center;}
+.modal-sheet{background:var(--bg2);border-radius:18px 18px 0 0;width:100%;max-width:430px;padding:16px 20px 32px;border-top:1px solid var(--bdr);max-height:85vh;overflow-y:auto;}
+.modal-handle{width:36px;height:4px;background:var(--bdr);border-radius:2px;margin:0 auto 16px;}
+.cat-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px;}
+.cat-btn{padding:10px 6px;border-radius:10px;border:2px solid var(--bdr);background:var(--bg3);color:var(--txt2);font-size:12px;font-weight:700;cursor:pointer;text-align:center;transition:all .2s;}
+.cat-btn.sel{border-color:var(--acc);background:rgba(0,191,255,.1);color:var(--acc);}
+.appt-card{background:var(--bg2);border:1px solid var(--bdr);border-radius:10px;padding:12px;margin-bottom:8px;}
+.cat-v{color:#9B59B6;}.cat-o{color:var(--warn);}.cat-s{color:var(--ok);}
+</style>
+</head>
+<body>
+<div id="app"><div class="loading"><div class="spin"></div><p>Carregando...</p></div></div>
+<script src="js/config.js"></script><script src="js/auth.js"></script>
+<script>
+const MONTHS=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+const DAYS=['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+const HOLIDAYS={'01-01':'Ano Novo','04-21':'Tiradentes','05-01':'Dia do Trabalho','09-07':'Independência','10-12':'N. Sra. Aparecida','11-02':'Finados','11-15':'Proclamação','12-25':'Natal'};
+
+let currentDate=new Date(), selectedDate=null;
+let appointments=[], pendingServices=[], modalOpen=false;
+let modalCat='servico';
+
+// Verificar se veio da tela de orçamento para agendar
+const urlParams=new URLSearchParams(window.location.search);
+const preApproveId=urlParams.get('approve_id');
+
+(async()=>{
+  const ok=await requireAuth();if(!ok)return;
+  await loadData();
+  if(preApproveId){
+    // Abrir modal diretamente para agendar o serviço aprovado
+    selectedDate=new Date().toISOString().split('T')[0];
+    modalOpen=true;modalCat='servico';
+  }
+  draw();
+})();
+
+async function loadData(){
+  const y=currentDate.getFullYear(),m=currentDate.getMonth();
+  const from=new Date(y,m,1).toISOString().split('T')[0];
+  const to=new Date(y,m+1,0).toISOString().split('T')[0];
+  const[{data:apps},{data:pend}]=await Promise.all([
+    sb.from('appointments').select('id,scheduled_date,scheduled_time,category,notes,quote_id,quotes(sequence,year,customers(name))')
+      .eq('owner_id',currentUser.id).gte('scheduled_date',from).lte('scheduled_date',to).order('scheduled_date').order('scheduled_time'),
+    sb.from('quotes').select('id,sequence,year,customers(name)').eq('owner_id',currentUser.id).eq('status','approved'),
+  ]);
+  appointments=apps||[];pendingServices=pend||[];
+}
+
+function draw(){
+  const y=currentDate.getFullYear(),m=currentDate.getMonth();
+  const firstDay=new Date(y,m,1).getDay();
+  const daysInMonth=new Date(y,m+1,0).getDate();
+  const todayStr=new Date().toISOString().split('T')[0];
+
+  const apptByDay={};
+  appointments.forEach(a=>{
+    if(!apptByDay[a.scheduled_date])apptByDay[a.scheduled_date]=[];
+    apptByDay[a.scheduled_date].push(a);
+  });
+
+  let days='';
+  const prevDays=new Date(y,m,0).getDate();
+  for(let i=firstDay-1;i>=0;i--) days+=`<div class="cal-day other">${prevDays-i}</div>`;
+
+  for(let d=1;d<=daysInMonth;d++){
+    const ds=`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const ap=apptByDay[ds]||[];
+    const mmdd=`${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const isH=!!HOLIDAYS[mmdd],isToday=ds===todayStr,isSel=selectedDate===ds;
+    let cls='cal-day';
+    if(isSel)cls+=' sel';
+    else if(isToday)cls+=' today';
+    else if(ap.length>=3)cls+=' full';
+    else if(ap.length>=2)cls+=' partial';
+    else if(ap.length>=1)cls+=' free';
+    if(isH&&!isSel)cls+=' holiday';
+    days+=`<div class="${cls}" onclick="selectDay('${ds}')" title="${isH?HOLIDAYS[mmdd]:''}">
+      ${d}${ap.length?`<div class="day-dot"></div>`:''}
+    </div>`;
+  }
+  const rem=(7-((firstDay+daysInMonth)%7))%7;
+  for(let d=1;d<=rem;d++) days+=`<div class="cal-day other">${d}</div>`;
+
+  const selAppts=selectedDate?(apptByDay[selectedDate]||[]):[];
+  const catCls={visita:'cat-v',orcamento:'cat-o',servico:'cat-s'};
+  const catLabel={visita:'🚗 Visita técnica',orcamento:'📋 Visita p/ orçamento',servico:'🔧 Serviço aprovado'};
+
+  const daySection=selectedDate?`
+    <div class="sec-hdr">
+      <div class="sec-title">${new Date(selectedDate+'T12:00').toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long'})}</div>
+      <button class="btn bp btn-sm" onclick="modalOpen=true;draw()">+ Agendar</button>
+    </div>
+    <div style="padding:0 14px;">
+      ${selAppts.length?selAppts.map(a=>{
+        const name=a.quotes?.customers?.name||'—';
+        const seq=a.quotes?.sequence?`#${a.quotes.sequence}/${a.quotes.year}`:'';
+        return`<div class="appt-card">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;" class="${catCls[a.category]||'cat-s'}">${catLabel[a.category]||a.category}</div>
+          <div style="font-size:13px;font-weight:700;margin-top:4px;">${a.scheduled_time?a.scheduled_time.slice(0,5):'Horário a definir'}</div>
+          <div style="font-size:13px;margin-top:2px;">${name} ${seq}</div>
+          ${a.notes?`<div style="font-size:11px;color:var(--txt2);margin-top:4px;">${a.notes}</div>`:''}
+          <div style="display:flex;gap:8px;margin-top:10px;">
+            ${a.category==='servico'&&a.quote_id?`<button class="btn bp btn-sm" onclick="nav('orcamento.html?id=${a.quote_id}')">Ver serviço</button>`:''}
+            <button class="btn berr btn-sm" onclick="deleteAppt(${a.id})">🗑️ Excluir</button>
+          </div>
+        </div>`;
+      }).join(''):`<div style="font-size:13px;color:var(--txt2);padding:8px 0;">Sem agendamentos neste dia.</div>`}
+    </div>`:'';
+
+  const pendSection=pendingServices.length?`
+    <div class="sec-hdr" style="margin-top:4px;">
+      <div class="sec-title">⏳ Serviços aguardando agendamento</div>
+      <span style="font-size:12px;color:var(--warn);font-weight:700;">${pendingServices.length}</span>
+    </div>
+    <div style="padding:0 14px 14px;">
+      ${pendingServices.map(q=>`
+        <div style="background:rgba(243,156,18,.08);border:1px solid var(--warn);border-radius:10px;padding:10px 12px;margin-bottom:8px;">
+          <div style="font-size:13px;font-weight:700;color:var(--warn);">🔧 Serviço #${q.sequence}/${q.year}</div>
+          <div style="font-size:12px;color:var(--txt2);">${q.customers?.name||'—'}</div>
+          <button class="btn bp btn-sm" style="margin-top:8px;" onclick="selectedDate=selectedDate||'${new Date().toISOString().split('T')[0]}';preServiceId=${q.id};modalCat='servico';modalOpen=true;draw()">📅 Agendar</button>
+        </div>`).join('')}
+    </div>`:'';
+
+  document.getElementById('app').innerHTML=`
+  <div class="page">
+    <div class="hdr"><h1>📅 Agenda</h1></div>
+    <div class="cal-nav">
+      <button onclick="prevMonth()">←</button>
+      <h3>${MONTHS[m]} ${y}</h3>
+      <button onclick="nextMonth()">→</button>
+    </div>
+    <div class="cal-grid">
+      ${DAYS.map(d=>`<div class="cal-head">${d}</div>`).join('')}
+      ${days}
+    </div>
+    <div class="legend">
+      <span><div class="dot" style="background:var(--ok);"></div>Livre</span>
+      <span><div class="dot" style="background:var(--warn);"></div>Parcial</span>
+      <span><div class="dot" style="background:var(--err);"></div>Cheio</span>
+      <span><div class="dot" style="background:var(--warn);border:1px solid var(--warn);"></div>Feriado ●</span>
+    </div>
+    ${daySection}
+    ${pendSection}
+  </div>
+  ${renderNav('agenda')}
+  ${modalOpen?renderModal():''}`;
+}
+
+let preServiceId=preApproveId?parseInt(preApproveId):null;
+
+function selectDay(d){selectedDate=d===selectedDate?null:d;draw();}
+async function prevMonth(){currentDate=new Date(currentDate.getFullYear(),currentDate.getMonth()-1,1);await loadData();draw();}
+async function nextMonth(){currentDate=new Date(currentDate.getFullYear(),currentDate.getMonth()+1,1);await loadData();draw();}
+
+function renderModal(){
+  const approvedOpts=pendingServices.map(q=>`<option value="${q.id}" ${preServiceId===q.id?'selected':''}>#${q.sequence}/${q.year} — ${q.customers?.name||'—'}</option>`).join('');
+  return`<div class="modal-overlay" onclick="closeModal()">
+    <div class="modal-sheet" onclick="event.stopPropagation()">
+      <div class="modal-handle"></div>
+      <div style="font-size:16px;font-weight:700;margin-bottom:14px;">📅 Novo agendamento${selectedDate?' — '+new Date(selectedDate+'T12:00').toLocaleDateString('pt-BR'):''}</div>
+      ${!selectedDate?`<div class="fg" style="margin-bottom:12px;"><label class="fl">Data</label><input class="fi" id="mDate" type="date" value="${new Date().toISOString().split('T')[0]}"></div>`:''}
+      <div style="font-size:11px;color:var(--txt2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Categoria</div>
+      <div class="cat-grid">
+        <div class="cat-btn ${modalCat==='visita'?'sel':''}" onclick="modalCat='visita';redrawModal()">🚗 Visita técnica</div>
+        <div class="cat-btn ${modalCat==='orcamento'?'sel':''}" onclick="modalCat='orcamento';redrawModal()">📋 Visita p/ orçamento</div>
+        <div class="cat-btn ${modalCat==='servico'?'sel':''}" onclick="modalCat='servico';redrawModal()">🔧 Serviço</div>
+      </div>
+      ${modalCat==='servico'?`
+        <div class="fg" style="margin-bottom:10px;">
+          <label class="fl">Serviço aprovado *</label>
+          <select class="fs" id="mApproved">
+            <option value="">Selecione o serviço...</option>
+            ${approvedOpts}
+          </select>
+        </div>`:`
+        <div class="fg" style="margin-bottom:10px;">
+          <label class="fl">Descrição</label>
+          <input class="fi" id="mDesc" placeholder="${modalCat==='visita'?'Ex: Visita técnica para diagnóstico':'Ex: Visita para orçamento no cliente'}">
+        </div>`}
+      <div class="fr" style="margin-bottom:10px;">
+        <div class="fg"><label class="fl">Horário *</label>
+          <input class="fi" id="mTime" type="time" value="08:00"></div>
+        <div class="fg"><label class="fl">Duração (h)</label>
+          <input class="fi" id="mDur" type="number" value="2" step="0.5" min="0.5" inputmode="decimal"></div>
+      </div>
+      <div class="fg" style="margin-bottom:14px;"><label class="fl">Observações</label>
+        <input class="fi" id="mNotes" placeholder="Endereço, materiais necessários..."></div>
+      <div id="mErr" style="margin-bottom:10px;"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <button class="btn bs" onclick="closeModal()">Cancelar</button>
+        <button class="btn bp" id="mSave" onclick="saveAppt()">✓ Agendar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function redrawModal(){draw();}
+function closeModal(){modalOpen=false;preServiceId=null;draw();}
+
+async function saveAppt(){
+  const date=selectedDate||document.getElementById('mDate')?.value;
+  const time=document.getElementById('mTime')?.value||null;
+  if(!date){toast('Selecione uma data','err');return;}
+  if(!time){showErr('mErr','Informe o horário');return;}
+
+  // Verificar duplicidade de horário
+  const{data:existing}=await sb.from('appointments')
+    .select('id').eq('owner_id',currentUser.id)
+    .eq('scheduled_date',date).eq('scheduled_time',time).limit(1);
+  if(existing?.length){
+    showErr('mErr','⚠️ Já existe um agendamento neste dia e horário. Escolha outro horário.');
+    return;
+  }
+
+  let quoteId=null,notes='';
+  if(modalCat==='servico'){
+    quoteId=parseInt(document.getElementById('mApproved')?.value)||preServiceId;
+    if(!quoteId){showErr('mErr','Selecione o serviço a agendar');return;}
+  } else {
+    notes=document.getElementById('mDesc')?.value?.trim()||'';
+  }
+  const extraNotes=document.getElementById('mNotes')?.value?.trim()||'';
+
+  setBtnLoading('mSave',true,'Agendar');
+
+  const{error}=await sb.from('appointments').insert([{
+    owner_id:currentUser.id,
+    scheduled_date:date,scheduled_time:time,
+    category:modalCat,quote_id:quoteId||null,
+    notes:[notes,extraNotes].filter(Boolean).join(' — ')||null,
+    created_at:new Date().toISOString(),
+  }]);
+
+  if(error){showErr('mErr','Erro: '+error.message);setBtnLoading('mSave',false,'Agendar');return;}
+
+  // Se for serviço, atualizar status do orçamento para scheduled
+  if(modalCat==='servico'&&quoteId){
+    const{data:qData}=await sb.from('quotes').select('status').eq('id',quoteId).single();
+    if(qData?.status==='approved'){
+      await sb.from('quotes').update({status:'scheduled',updated_at:new Date().toISOString()}).eq('id',quoteId);
+      await sb.from('status_logs').insert([{
+        quote_id:quoteId,owner_id:currentUser.id,from_status:'approved',to_status:'scheduled',
+        changed_by:currentUser.id,changed_at:new Date().toISOString()
+      }]);
+    }
+  }
+
+  toast('Agendado com sucesso!','ok');
+  modalOpen=false;preServiceId=null;
+  await loadData();draw();
+}
+
+async function deleteAppt(id){
+  if(!confirm('Excluir este agendamento?'))return;
+  await sb.from('appointments').delete().eq('id',id);
+  toast('Agendamento excluído','ok');
+  await loadData();draw();
+}
+</script>
+</body>
+</html>

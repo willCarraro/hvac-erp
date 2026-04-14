@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<meta name="mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0F1923">
+<title>MeuGestHVAC — PDF do Orçamento</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+/* Tela normal */
+.preview-wrap{padding:14px;}
+.preview-actions{display:flex;flex-direction:column;gap:10px;margin-bottom:16px;}
+.preview-box{background:white;border-radius:12px;padding:24px;color:#111;font-family:'Segoe UI',system-ui,sans-serif;line-height:1.6;}
+.pdf-header{border-bottom:3px solid #00BFFF;padding-bottom:16px;margin-bottom:16px;}
+.company-name{font-size:22px;font-weight:800;color:#0F1923;}
+.company-info{font-size:12px;color:#666;margin-top:4px;}
+.oc-title{font-size:20px;font-weight:700;color:#0F1923;margin:16px 0 4px;}
+.oc-num{font-size:13px;color:#666;}
+.section-title{font-size:13px;font-weight:700;color:#0F1923;text-transform:uppercase;letter-spacing:.5px;margin:16px 0 8px;padding-bottom:4px;border-bottom:1px solid #e0e0e0;}
+.client-block{background:#f8f9fa;border-radius:8px;padding:12px;margin-bottom:12px;}
+.client-name{font-size:15px;font-weight:700;color:#0F1923;}
+.client-info{font-size:12px;color:#666;margin-top:3px;}
+.item-row{display:flex;justify-content:space-between;align-items:flex-start;padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:13px;}
+.item-row:last-child{border-bottom:none;}
+.item-name{flex:1;color:#333;}
+.item-val{font-weight:600;color:#0F1923;text-align:right;margin-left:10px;flex-shrink:0;}
+.total-box{background:#0F1923;border-radius:8px;padding:14px;margin-top:16px;color:white;}
+.total-row{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;}
+.total-final{font-size:20px;font-weight:800;color:#00BFFF;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.2);}
+.validity{background:#f0f9ff;border:1px solid #00BFFF;border-radius:8px;padding:10px 12px;margin-top:14px;font-size:12px;color:#0F1923;}
+.footer-pdf{margin-top:20px;padding-top:12px;border-top:1px solid #e0e0e0;font-size:11px;color:#999;text-align:center;}
+
+/* Print */
+@media print {
+  body { background: white; }
+  .hdr, .preview-actions, .bnav { display: none !important; }
+  .preview-wrap { padding: 0; }
+  .preview-box { box-shadow: none; border-radius: 0; padding: 16px; }
+  .preview-box { color: #111 !important; }
+}
+</style>
+</head>
+<body>
+<div id="app"><div class="loading"><div class="spin"></div><p>Carregando orçamento...</p></div></div>
+<script src="js/config.js"></script><script src="js/auth.js"></script>
+<script>
+const params=new URLSearchParams(window.location.search);
+const quoteId=params.get('id');
+
+(async()=>{
+  if(!quoteId){nav('orcamentos.html');return;}
+  const ok=await requireAuth();if(!ok)return;
+
+  const[{data:q},{data:instItems},{data:prevItems},{data:extras},{data:corrItems}]=await Promise.all([
+    sb.from('quotes').select('*,customers(name,phone,email,document,street,number,city,state)').eq('id',quoteId).single(),
+    sb.from('quote_installation_items').select('*').eq('quote_id',quoteId),
+    sb.from('quote_preventive_items').select('*').eq('quote_id',quoteId),
+    sb.from('quote_extras').select('*').eq('quote_id',quoteId),
+    sb.from('quote_corrective_items').select('*').eq('quote_id',quoteId),
+  ]);
+
+  if(!q){toast('Orçamento não encontrado','err');history.back();return;}
+
+  const co=userCompany||{};
+  const c=q.customers||{};
+  const stype=q.params_snapshot?.service_type||'installation';
+  const today=new Date().toLocaleDateString('pt-BR');
+  const validity=new Date(Date.now()+30*86400000).toLocaleDateString('pt-BR');
+
+  // Calcular itens para exibição (valores de VENDA, sem mostrar custo)
+  let itemsRows='';
+  let totalMat=0, totalExtras=0, totalLabor=q.params_snapshot?.labor_value||0;
+
+  if(instItems?.length){
+    itemsRows+=`<div class="section-title">Materiais</div>`;
+    instItems.forEach(i=>{
+      const sell=Math.round((i.unit_cost||0)*(1+(i.margin_pct||30)/100)*(i.quantity||1)*100)/100;
+      totalMat+=sell;
+      itemsRows+=`<div class="item-row"><span class="item-name">${i.name} (${i.quantity} ${i.unit})</span><span class="item-val">${fmt(sell)}</span></div>`;
+    });
+  }
+
+  if(prevItems?.length){
+    const typeL={hi_wall:'Hi Wall',piso_teto:'Piso Teto',cassete:'Cassete'};
+    const MULT={easy:financeConfig?.mult_easy||1,medium:financeConfig?.mult_medium||1.3,hard:financeConfig?.mult_hard||1.7};
+    const BASE={hi_wall:financeConfig?.hiwall_base||250,piso_teto:financeConfig?.pisoteto_base||380,cassete:financeConfig?.cassete_base||450};
+    itemsRows+=`<div class="section-title">Equipamentos</div>`;
+    prevItems.forEach(i=>{
+      const sell=Math.round((i.base_price||BASE[i.ac_type]||250)*(MULT[i.difficulty]||1.3)*(i.quantity||1)*100)/100;
+      totalMat+=sell;
+      itemsRows+=`<div class="item-row"><span class="item-name">${typeL[i.ac_type]||i.ac_type} ${(i.capacity_btu||0).toLocaleString()} BTU · ${i.quantity}×</span><span class="item-val">${fmt(sell)}</span></div>`;
+    });
+  }
+
+  if(corrItems?.length){
+    const ci=corrItems[0];
+    const GM=financeConfig?.gas_margin||25;
+    const PM=financeConfig?.parts_margin||30;
+    if(ci.has_gas){
+      const s=Math.round((ci.gas_kg||0)*(ci.gas_cost_kg||0)*(1+GM/100)*100)/100;
+      totalMat+=s;
+      itemsRows+=`<div class="section-title">Insumos</div><div class="item-row"><span class="item-name">Gás ${(ci.gas_type||'').toUpperCase()} (${ci.gas_kg}kg)</span><span class="item-val">${fmt(s)}</span></div>`;
+    }
+    if(ci.has_nitrogen){
+      const s=Math.round((ci.nitrogen_cost||0)*(1+GM/100)*100)/100;
+      totalMat+=s;
+      itemsRows+=`<div class="item-row"><span class="item-name">Nitrogênio (${ci.nitrogen_m3}m³)</span><span class="item-val">${fmt(s)}</span></div>`;
+    }
+  }
+
+  if(extras?.length){
+    itemsRows+=`<div class="section-title">Extras</div>`;
+    extras.forEach(e=>{
+      totalExtras+=e.value||0;
+      itemsRows+=`<div class="item-row"><span class="item-name">${e.description}</span><span class="item-val">${fmt(e.value)}</span></div>`;
+    });
+  }
+
+  const disc=q.discount||0;
+
+  document.getElementById('app').innerHTML=`
+  <div style="background:var(--bg);">
+    <div class="hdr">
+      <button class="back-btn" onclick="nav('orcamento.html?id=${q.id}')">←</button>
+      <h1>PDF — Orçamento #${q.sequence}</h1>
+    </div>
+    <div class="preview-wrap">
+      <div class="preview-actions">
+        <button class="btn bp" onclick="window.print()">🖨️ Imprimir / Salvar PDF</button>
+        <div style="font-size:12px;color:var(--txt2);text-align:center;">No celular: toque em Imprimir → selecione "Salvar como PDF"</div>
+      </div>
+
+      <!-- DOCUMENTO -->
+      <div class="preview-box" id="pdfDoc">
+
+        <!-- CABEÇALHO -->
+        <div class="pdf-header">
+          <div class="company-name">${co.company_name||'Empresa'}</div>
+          <div class="company-info">
+            ${co.cnpj?`CNPJ: ${co.cnpj} · `:''}${co.phone||''}
+            ${co.address?`<br>${co.address}`:''} ${co.city?`— ${co.city}`:''} ${co.state||''}
+            ${co.email?`<br>${co.email}`:''}
+          </div>
+        </div>
+
+        <!-- TÍTULO -->
+        <div class="oc-title">PROPOSTA DE SERVIÇO</div>
+        <div class="oc-num">Orçamento #${q.sequence}/${q.year} · Data: ${today}</div>
+
+        <!-- CLIENTE -->
+        <div class="section-title">Dados do Cliente</div>
+        <div class="client-block">
+          <div class="client-name">${c.name||'—'}</div>
+          <div class="client-info">
+            ${c.document?`CPF/CNPJ: ${c.document}<br>`:''}
+            ${c.phone?`Telefone: ${c.phone}<br>`:''}
+            ${c.email?`E-mail: ${c.email}<br>`:''}
+            ${c.street?`Endereço: ${c.street}, ${c.number||''}${c.city?' — '+c.city:''}${c.state?'/'+c.state:''}`:'' }
+          </div>
+        </div>
+
+        <!-- ITENS -->
+        ${itemsRows}
+
+        <!-- TOTAL -->
+        <div class="total-box">
+          ${totalMat?`<div class="total-row"><span>Materiais e equipamentos</span><span>${fmt(totalMat)}</span></div>`:''}
+          ${totalExtras?`<div class="total-row"><span>Extras</span><span>${fmt(totalExtras)}</span></div>`:''}
+          ${totalLabor?`<div class="total-row"><span>Mão de obra</span><span>${fmt(totalLabor)}</span></div>`:''}
+          ${disc?`<div class="total-row"><span>Desconto</span><span>— ${fmt(disc)}</span></div>`:''}
+          <div class="total-final">
+            <div style="font-size:13px;opacity:.8;margin-bottom:2px;">VALOR TOTAL</div>
+            <div>${fmt(q.total_price)}</div>
+          </div>
+        </div>
+
+        <!-- VALIDADE -->
+        <div class="validity">
+          ⏱️ Esta proposta é válida até <strong>${validity}</strong>
+        </div>
+
+        ${q.notes?`<div style="margin-top:14px;padding:12px;background:#f8f9fa;border-radius:8px;font-size:12px;color:#555;"><strong>Observações:</strong><br>${q.notes}</div>`:''}
+
+        <div class="footer-pdf">
+          ${co.company_name||'Empresa'} · Proposta gerada em ${today} · MeuGestHVAC
+        </div>
+      </div>
+    </div>
+  </div>`;
+})();
+</script>
+</body>
+</html>

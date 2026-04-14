@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<meta name="mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0F1923">
+<title>MeuGestHVAC — Financeiro</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+.fin-tabs{display:flex;background:var(--bg2);border-bottom:1px solid var(--bdr);}
+.ftab{flex:1;padding:11px;border:none;background:none;color:var(--txt2);font-size:13px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;}
+.ftab.on{color:var(--acc);border-bottom-color:var(--acc);}
+.sum-bar{display:flex;background:var(--bg3);border-bottom:1px solid var(--bdr);}
+.sum-item{flex:1;text-align:center;padding:12px 4px;border-right:1px solid var(--bdr);}
+.sum-item:last-child{border-right:none;}
+.sum-lbl{font-size:10px;color:var(--txt2);text-transform:uppercase;letter-spacing:.4px;}
+.sum-val{font-size:16px;font-weight:800;margin-top:3px;}
+.fin-card{background:var(--bg2);border:1px solid var(--bdr);border-radius:12px;padding:13px;margin-bottom:9px;}
+.fin-hdr{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;}
+.fin-name{font-size:14px;font-weight:600;flex:1;}
+.fin-sub{font-size:11px;color:var(--txt2);margin-top:4px;}
+.fin-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;}
+.chip-pend{background:rgba(243,156,18,.15);color:var(--warn);padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700;}
+.chip-done{background:rgba(46,204,113,.15);color:var(--ok);padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700;}
+.chip-part{background:rgba(0,191,255,.15);color:var(--acc);padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700;}
+.chip-paid{background:rgba(46,204,113,.1);color:var(--ok);padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700;border:1px solid var(--ok);}
+.drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:400;display:flex;align-items:flex-end;justify-content:center;}
+.drawer{background:var(--bg2);border-radius:18px 18px 0 0;width:100%;max-width:430px;padding:0 20px 32px;border-top:1px solid var(--bdr);max-height:90vh;overflow-y:auto;}
+.drawer-handle{width:36px;height:4px;background:var(--bdr);border-radius:2px;margin:12px auto 16px;}
+.drawer-title{font-size:16px;font-weight:700;margin-bottom:16px;}
+</style>
+</head>
+<body>
+<div id="app"><div class="loading"><div class="spin"></div><p>Carregando...</p></div></div>
+<script src="js/config.js"></script><script src="js/auth.js"></script>
+<script>
+let activeTab='payable';
+let receivables=[], payables=[];
+let drawer=null, drawerData={};
+
+const CAT_LABELS={material:'📦 Material',fuel:'⛽ Combustível',tools:'🔧 Ferramentas',rent:'🏠 Aluguel',luz:'💡 Luz',internet:'📶 Internet',labor:'👷 MO Terceiros',other:'📌 Outros'};
+const PM_LABELS={pix:'PIX',cash:'Dinheiro',debit:'Débito',credit:'Crédito',bank_slip:'Boleto',transfer:'Transferência'};
+
+(async()=>{
+  const ok=await requireAuth();if(!ok)return;
+  await loadAll();draw();
+})();
+
+async function loadAll(){
+  const[r,p]=await Promise.all([
+    sb.from('accounts_receivable').select('*').eq('owner_id',currentUser.id).order('created_at',{ascending:false}),
+    sb.from('accounts_payable').select('*').eq('owner_id',currentUser.id).order('is_paid').order('due_date'),
+  ]);
+  receivables=r.data||[];payables=p.data||[];
+}
+
+function draw(){
+  const totalRecv=receivables.filter(r=>r.status!=='received').reduce((s,r)=>s+(r.amount_due||0),0);
+  const totalPay=payables.filter(p=>!p.is_paid).reduce((s,p)=>s+(p.amount||0),0);
+  const recvDone=receivables.filter(r=>r.status==='received').reduce((s,r)=>s+(r.amount_received||0),0);
+
+  document.getElementById('app').innerHTML=`
+  <div class="page">
+    <div class="hdr"><h1>💰 Financeiro</h1></div>
+    <div class="sum-bar">
+      <div class="sum-item"><div class="sum-lbl">A receber</div><div class="sum-val" style="color:var(--ok);">${fmt(totalRecv)}</div></div>
+      <div class="sum-item"><div class="sum-lbl">A pagar</div><div class="sum-val" style="color:var(--err);">${fmt(totalPay)}</div></div>
+      <div class="sum-item"><div class="sum-lbl">Recebido</div><div class="sum-val" style="color:var(--acc);">${fmt(recvDone)}</div></div>
+    </div>
+    <div class="fin-tabs">
+      <button class="ftab ${activeTab==='payable'?'on':''}" onclick="setTab('payable')">Contas a Pagar</button>
+      <button class="ftab ${activeTab==='receivable'?'on':''}" onclick="setTab('receivable')">Contas a Receber</button>
+    </div>
+    <div style="padding:12px 14px 80px;">
+      ${activeTab==='payable'?drawPayable():drawReceivable()}
+    </div>
+    <button class="fab" onclick="${activeTab==='payable'?'openExpenseDrawer()':'toast(\'Use as contas a receber para registrar pagamentos\',\'warn\')'}"
+      style="bottom:calc(var(--nav-h)+14px);">+</button>
+  </div>
+  ${renderNav('financeiro')}
+  ${drawer?renderDrawer():''}`;
+}
+
+function drawPayable(){
+  const pend=payables.filter(p=>!p.is_paid);
+  const paid=payables.filter(p=>p.is_paid);
+  if(!payables.length)return`<div class="empty"><div class="eico">📄</div><h3>Nenhuma despesa</h3><p>Toque em + para adicionar</p></div>`;
+  return[
+    pend.length?`<div style="font-size:11px;font-weight:700;color:var(--txt2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Pendentes (${pend.length})</div>`:'',
+    ...pend.map(p=>payCard(p)),
+    paid.length?`<div style="font-size:11px;font-weight:700;color:var(--txt2);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 8px;">Pagas (${paid.length})</div>`:'',
+    ...paid.map(p=>payCard(p)),
+  ].join('');
+}
+
+function payCard(p){
+  const catLbl=CAT_LABELS[p.category]||p.category;
+  const recLbl=p.recurrence==='fixed'?'🔁 Fixa':'1× Variável';
+  return`<div class="fin-card">
+    <div class="fin-hdr">
+      <div style="flex:1;">
+        <div class="fin-name">${p.description}</div>
+        <div class="fin-sub">${catLbl} · ${recLbl}${p.due_date?' · Venc: '+fdate(p.due_date):''}</div>
+        ${p.is_paid?`<div class="fin-sub" style="color:var(--ok);">✓ Pago ${fdate(p.paid_at)} · ${PM_LABELS[p.payment_method]||''}</div>`:''}
+      </div>
+      <div style="text-align:right;flex-shrink:0;">
+        <div style="font-size:16px;font-weight:800;color:${p.is_paid?'var(--txt2)':'var(--err)'};">${fmt(p.amount)}</div>
+        ${p.is_paid?`<span class="chip-paid">Pago</span>`:''}
+      </div>
+    </div>
+    <!-- Sempre mostrar editar e excluir, independente de estar pago -->
+    <div class="fin-actions">
+      ${!p.is_paid?`<button class="btn bok btn-sm" onclick="openPayPayable(${p.id},${p.amount})">✓ Marcar pago</button>`:''}
+      <button class="btn bs btn-sm" onclick="openExpenseDrawer(${p.id})">✏️ Editar</button>
+      <button class="btn berr btn-sm" onclick="deletePayable(${p.id})">🗑️</button>
+    </div>
+  </div>`;
+}
+
+function drawReceivable(){
+  if(!receivables.length)return`<div class="empty"><div class="eico">💰</div><h3>Nenhuma conta a receber</h3><p>Geradas automaticamente quando um serviço é concluído</p></div>`;
+  return receivables.map(r=>{
+    const name=r.customer_name||'—';
+    const pct=r.amount_due>0?Math.round((r.amount_received||0)/r.amount_due*100):0;
+    const chipCls=r.status==='received'?'chip-done':r.status==='partial'?'chip-part':'chip-pend';
+    const chipLbl=r.status==='received'?'Recebido':r.status==='partial'?`Parcial ${pct}%`:'Pendente';
+    return`<div class="fin-card">
+      <div class="fin-hdr">
+        <div>
+          <div class="fin-name">${name}</div>
+          <div class="fin-sub"><span class="${chipCls}">${chipLbl}</span>${r.due_date?' · Venc: '+fdate(r.due_date):''}</div>
+          ${r.amount_received>0?`<div class="fin-sub" style="color:var(--ok);">Recebido: ${fmt(r.amount_received)}</div>`:''}
+          ${r.status==='partial'?`<div class="fin-sub" style="color:var(--warn);">Pendente: ${fmt((r.amount_due||0)-(r.amount_received||0))}</div>`:''}
+        </div>
+        <div style="font-size:16px;font-weight:800;color:var(--ok);">${fmt(r.amount_due)}</div>
+      </div>
+      ${r.status!=='received'?`<div class="fin-actions">
+        <button class="btn bp btn-sm" onclick="openReceiveDrawer(${r.id},${r.amount_due},${r.amount_received||0})">💳 Registrar pagamento</button>
+        <button class="btn bs btn-sm" onclick="setDueDate(${r.id})">📅 Vencimento</button>
+      </div>`:`<div style="font-size:11px;color:var(--ok);margin-top:8px;">✓ Totalmente recebido</div>`}
+    </div>`;
+  }).join('');
+}
+
+function setTab(t){activeTab=t;draw();}
+
+function openExpenseDrawer(editId){
+  const ed=editId?payables.find(p=>p.id===editId):null;
+  drawer='expense';drawerData={editId,ed};draw();
+}
+function openPayPayable(id,amount){drawer='payPayable';drawerData={id,amount};draw();}
+function openReceiveDrawer(id,due,received){drawer='receive';drawerData={id,due,received};draw();}
+function closeDrawer(){drawer=null;drawerData={};draw();}
+
+function renderDrawer(){
+  if(drawer==='expense')return expenseDrawer();
+  if(drawer==='payPayable')return payPayableDrawer();
+  if(drawer==='receive')return receiveDrawer();
+  return'';
+}
+
+function expenseDrawer(){
+  const ed=drawerData.ed||{};
+  const catOpts=Object.entries(CAT_LABELS).map(([v,l])=>`<option value="${v}" ${(ed.category||'other')===v?'selected':''}>${l}</option>`).join('');
+  return`<div class="drawer-overlay" onclick="closeDrawer()">
+    <div class="drawer" onclick="event.stopPropagation()">
+      <div class="drawer-handle"></div>
+      <div class="drawer-title">${drawerData.editId?'✏️ Editar despesa':'➕ Nova despesa'}</div>
+      <div class="fg"><label class="fl">Descrição *</label>
+        <input class="fi" id="dDesc" value="${ed.description||''}" placeholder="Ex: Conta de luz, Combustível..."></div>
+      <div class="fg" style="margin-top:10px;"><label class="fl">Valor R$ *</label>
+        <input class="fi" id="dAmt" type="number" value="${ed.amount||0}" step="1" min="0" inputmode="decimal"></div>
+      <div class="fg" style="margin-top:10px;"><label class="fl">Categoria</label>
+        <select class="fs" id="dCat">${catOpts}</select></div>
+      <div class="fr" style="margin-top:10px;">
+        <div class="fg"><label class="fl">Tipo</label>
+          <select class="fs" id="dRec">
+            <option value="variable" ${(ed.recurrence||'variable')==='variable'?'selected':''}>Variável (única)</option>
+            <option value="fixed" ${ed.recurrence==='fixed'?'selected':''}>Fixa (mensal)</option>
+          </select></div>
+        <div class="fg"><label class="fl">Vencimento</label>
+          <input class="fi" id="dDue" type="date" value="${ed.due_date||new Date().toISOString().split('T')[0]}"></div>
+      </div>
+      <div id="dErr" style="margin-top:8px;"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px;">
+        <button class="btn bs" onclick="closeDrawer()">Cancelar</button>
+        <button class="btn bp" id="dSave" onclick="saveExpense()">✓ Salvar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function payPayableDrawer(){
+  const pmOpts=Object.entries(PM_LABELS).map(([v,l])=>`<option value="${v}">${l}</option>`).join('');
+  return`<div class="drawer-overlay" onclick="closeDrawer()">
+    <div class="drawer" onclick="event.stopPropagation()">
+      <div class="drawer-handle"></div>
+      <div class="drawer-title">✓ Marcar como pago</div>
+      <div style="font-size:22px;font-weight:800;color:var(--err);margin-bottom:14px;">${fmt(drawerData.amount)}</div>
+      <div class="fg"><label class="fl">Método de pagamento</label>
+        <select class="fs" id="ppMethod">${pmOpts}</select></div>
+      <div class="fg" style="margin-top:10px;"><label class="fl">Data do pagamento</label>
+        <input class="fi" id="ppDate" type="date" value="${new Date().toISOString().split('T')[0]}"></div>
+      <div id="ppErr" style="margin-top:8px;"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px;">
+        <button class="btn bs" onclick="closeDrawer()">Cancelar</button>
+        <button class="btn bok" id="ppSave" onclick="savePayPayable()">✓ Confirmar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function receiveDrawer(){
+  const remaining=Math.max(0,(drawerData.due||0)-(drawerData.received||0));
+  const pmOpts=Object.entries(PM_LABELS).map(([v,l])=>`<option value="${v}">${l}</option>`).join('');
+  return`<div class="drawer-overlay" onclick="closeDrawer()">
+    <div class="drawer" onclick="event.stopPropagation()">
+      <div class="drawer-handle"></div>
+      <div class="drawer-title">💳 Registrar recebimento</div>
+      <div style="display:flex;gap:14px;margin-bottom:14px;">
+        <div><div style="font-size:11px;color:var(--txt2);">Total</div><div style="font-size:18px;font-weight:800;color:var(--ok);">${fmt(drawerData.due)}</div></div>
+        ${drawerData.received>0?`<div><div style="font-size:11px;color:var(--txt2);">Já recebido</div><div style="font-size:18px;font-weight:800;color:var(--acc);">${fmt(drawerData.received)}</div></div>`:''}
+        <div><div style="font-size:11px;color:var(--txt2);">Restante</div><div style="font-size:18px;font-weight:800;color:var(--warn);">${fmt(remaining)}</div></div>
+      </div>
+      <div class="fg"><label class="fl">Valor recebido R$ *</label>
+        <input class="fi" id="rvAmt" type="number" value="${remaining.toFixed(2)}" step="1" min="0" inputmode="decimal"></div>
+      <div class="fg" style="margin-top:10px;"><label class="fl">Método de pagamento</label>
+        <select class="fs" id="rvMethod">${pmOpts}</select></div>
+      <div class="fg" style="margin-top:10px;"><label class="fl">Data do recebimento</label>
+        <input class="fi" id="rvDate" type="date" value="${new Date().toISOString().split('T')[0]}"></div>
+      <div id="rvErr" style="margin-top:8px;"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px;">
+        <button class="btn bs" onclick="closeDrawer()">Cancelar</button>
+        <button class="btn bok" id="rvSave" onclick="saveReceive()">✓ Confirmar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function saveExpense(){
+  const desc=val('dDesc'),amt=parseFloat(document.getElementById('dAmt')?.value)||0;
+  clearErr('dErr');
+  if(!desc){showErr('dErr','Preencha a descrição');return;}
+  if(!amt){showErr('dErr','Informe o valor');return;}
+  setBtnLoading('dSave',true,'Salvar');
+  const payload={
+    description:desc,amount:amt,
+    category:document.getElementById('dCat')?.value||'other',
+    recurrence:document.getElementById('dRec')?.value||'variable',
+    due_date:document.getElementById('dDue')?.value||null,
+    updated_at:new Date().toISOString(),
+  };
+  let error;
+  if(drawerData.editId){
+    const r=await sb.from('accounts_payable').update(payload).eq('id',drawerData.editId);error=r.error;
+  } else {
+    payload.owner_id=currentUser.id;payload.is_paid=false;payload.created_at=new Date().toISOString();
+    const r=await sb.from('accounts_payable').insert([payload]);error=r.error;
+  }
+  setBtnLoading('dSave',false,'Salvar');
+  if(error){showErr('dErr','Erro: '+error.message);return;}
+  toast('Despesa salva!','ok');
+  drawer=null;drawerData={};
+  await loadAll();draw();
+}
+
+async function savePayPayable(){
+  const method=document.getElementById('ppMethod')?.value||'pix';
+  const date=document.getElementById('ppDate')?.value||new Date().toISOString().split('T')[0];
+  setBtnLoading('ppSave',true,'Confirmar');
+  const{error}=await sb.from('accounts_payable').update({is_paid:true,paid_at:date,payment_method:method,updated_at:new Date().toISOString()}).eq('id',drawerData.id);
+  setBtnLoading('ppSave',false,'Confirmar');
+  if(error){showErr('ppErr','Erro: '+error.message);return;}
+  toast('Pagamento registrado!','ok');
+  drawer=null;drawerData={};
+  await loadAll();draw();
+}
+
+async function saveReceive(){
+  const amt=parseFloat(document.getElementById('rvAmt')?.value)||0;
+  const method=document.getElementById('rvMethod')?.value||'pix';
+  const date=document.getElementById('rvDate')?.value||new Date().toISOString().split('T')[0];
+  clearErr('rvErr');
+  if(!amt){showErr('rvErr','Informe o valor');return;}
+  setBtnLoading('rvSave',true,'Confirmar');
+  const newTotal=Math.round(((drawerData.received||0)+amt)*100)/100;
+  const newStatus=newTotal>=(drawerData.due||0)-0.01?'received':newTotal>0?'partial':'pending';
+  const[r1,r2]=await Promise.all([
+    sb.from('accounts_receivable').update({amount_received:newTotal,status:newStatus}).eq('id',drawerData.id),
+    sb.from('payments').insert([{receivable_id:drawerData.id,owner_id:currentUser.id,amount:amt,payment_method:method,paid_at:date,created_by_id:currentUser.id}]),
+  ]);
+  setBtnLoading('rvSave',false,'Confirmar');
+  if(r1.error){showErr('rvErr','Erro: '+r1.error.message);return;}
+  toast(newStatus==='received'?'Pagamento total recebido! ✓':'Pagamento parcial registrado','ok');
+  drawer=null;drawerData={};
+  await loadAll();draw();
+}
+
+async function deletePayable(id){
+  if(!confirm('Excluir esta despesa? (mesmo que já paga)'))return;
+  await sb.from('accounts_payable').delete().eq('id',id);
+  toast('Despesa excluída','ok');
+  await loadAll();draw();
+}
+
+async function setDueDate(id){
+  const d=prompt('Data de vencimento (AAAA-MM-DD):',new Date().toISOString().split('T')[0]);
+  if(!d)return;
+  await sb.from('accounts_receivable').update({due_date:d}).eq('id',id);
+  toast('Vencimento definido!','ok');
+  await loadAll();draw();
+}
+</script>
+</body>
+</html>
