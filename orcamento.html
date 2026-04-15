@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<meta name="mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0F1923">
+<title>MeuGestHVAC — Orçamento</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+.flow-bar{display:flex;align-items:flex-start;padding:14px 14px 6px;gap:0;overflow-x:auto;-webkit-overflow-scrolling:touch;}
+.flow-bar::-webkit-scrollbar{display:none;}
+.flow-item{display:flex;flex-direction:column;align-items:center;flex-shrink:0;}
+.flow-dot{width:28px;height:28px;border-radius:50%;background:var(--bg3);border:2px solid var(--bdr);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:var(--txt2);flex-shrink:0;}
+.flow-dot.done{background:var(--ok);border-color:var(--ok);color:white;}
+.flow-dot.active{background:var(--acc);border-color:var(--acc);color:#0F1923;}
+.flow-lbl{font-size:9px;color:var(--txt2);text-align:center;margin-top:3px;white-space:nowrap;max-width:44px;}
+.flow-line{width:20px;height:2px;background:var(--bdr);margin-top:13px;flex-shrink:0;}
+.flow-line.done{background:var(--ok);}
+.action-grid{display:flex;flex-direction:column;gap:10px;padding:0 14px 14px;}
+.ab{padding:13px 16px;border-radius:10px;border:none;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;}
+.ab:active{opacity:.8;}
+.ab-send{background:var(--acc);color:#0F1923;}
+.ab-approve{background:var(--ok);color:white;}
+.ab-reject{background:var(--bg3);color:var(--err);border:1.5px solid var(--err);}
+.ab-edit{background:var(--bg3);color:var(--txt);border:1.5px solid var(--bdr);}
+.ab-pdf{background:var(--bg3);color:var(--acc);border:1.5px solid var(--acc);}
+.ab-agenda{background:#9B59B6;color:white;}
+.ab-finish{background:var(--ok);color:white;}
+.detail-box{background:var(--bg2);border:1px solid var(--bdr);border-radius:12px;margin:0 14px 10px;overflow:hidden;}
+.detail-hdr{background:var(--bg3);padding:8px 14px;font-size:11px;font-weight:700;color:var(--txt2);text-transform:uppercase;letter-spacing:.5px;}
+.drow2{display:flex;justify-content:space-between;align-items:flex-start;padding:9px 14px;border-bottom:1px solid var(--bdr);font-size:13px;}
+.drow2:last-child{border-bottom:none;}
+.dlbl2{color:var(--txt2);flex-shrink:0;padding-right:8px;}
+.dval2{color:var(--txt);font-weight:500;text-align:right;}
+.mat-drow{padding:9px 14px;border-bottom:1px solid var(--bdr);font-size:13px;}
+.mat-drow:last-child{border-bottom:none;}
+.mat-dname{font-weight:600;}
+.mat-dinfo{display:flex;gap:12px;font-size:11px;color:var(--txt2);margin-top:3px;}
+.mat-dsell{color:var(--acc);font-weight:700;}
+</style>
+</head>
+<body>
+<div id="app"><div class="loading"><div class="spin"></div><p>Carregando...</p></div></div>
+<script src="js/config.js"></script><script src="js/auth.js"></script>
+<script>
+const params=new URLSearchParams(window.location.search);
+const quoteId=params.get('id');
+const LABELS={draft:'Rascunho',pending:'Pendente',to_send:'A Enviar',sent:'Enviado',approved:'Aprovado',scheduled:'Agendado',finished:'Concluído',rejected:'Reprovado'};
+const STYPE={installation:'🔧 Instalação',preventive:'🛡️ Preventiva',corrective:'⚡ Corretiva'};
+
+(async()=>{
+  if(!quoteId){nav('orcamentos.html');return;}
+  const ok=await requireAuth();if(!ok)return;
+  await renderPage();
+})();
+
+async function renderPage(){
+  const[{data:q},{data:items},{data:logs},{data:instItems},{data:prevItems},{data:corrItems},{data:extras}]=await Promise.all([
+    sb.from('quotes').select('*,customers(id,name,phone,email,document,street,number,city,state)').eq('id',quoteId).single(),
+    sb.from('quote_items').select('*').eq('quote_id',quoteId),
+    sb.from('status_logs').select('*').order('changed_at').eq('quote_id',quoteId),
+    sb.from('quote_installation_items').select('*').eq('quote_id',quoteId),
+    sb.from('quote_preventive_items').select('*').eq('quote_id',quoteId),
+    sb.from('quote_corrective_items').select('*').eq('quote_id',quoteId),
+    sb.from('quote_extras').select('*').eq('quote_id',quoteId),
+  ]);
+  if(!q){toast('Orçamento não encontrado','err');nav('orcamentos.html');return;}
+
+  const stype=items?.[0]?.service_type||'installation';
+  const stypePage={installation:'orcamento-instalacao',preventive:'orcamento-preventiva',corrective:'orcamento-corretiva'}[stype]||'orcamento-instalacao';
+  const isDraft=['draft','pending','to_send'].includes(q.status);
+  const isSent=q.status==='sent';
+  const isApproved=q.status==='approved';
+  const isScheduled=q.status==='scheduled';
+  const isFinished=q.status==='finished';
+  const isRejected=q.status==='rejected';
+
+  // ---- BARRA DE PROGRESSO ----
+  const FLOW=[{s:'draft',l:'Rascunho'},{s:'sent',l:'Enviado'},{s:'approved',l:'Aprovado'},{s:'scheduled',l:'Agendado'},{s:'finished',l:'Concluído'}];
+  let curIdx=FLOW.findIndex(f=>f.s===q.status);
+  if(isRejected) curIdx=-1;
+  const flowHtml=`<div class="flow-bar">
+    ${FLOW.map((f,i)=>`
+      <div class="flow-item">
+        <div class="flow-dot ${i<curIdx?'done':i===curIdx?'active':''}">${i<curIdx?'✓':i+1}</div>
+        <div class="flow-lbl">${f.l}</div>
+      </div>
+      ${i<FLOW.length-1?`<div class="flow-line ${i<curIdx?'done':''}"></div>`:''}`
+    ).join('')}
+  </div>`;
+
+  // ---- DETALHES DOS ITENS ----
+  const typeL={hi_wall:'Hi Wall',piso_teto:'Piso Teto',cassete:'Cassete'};
+  const diffL={easy:'Fácil',medium:'Médio',hard:'Difícil'};
+  let detailHtml='';
+  if(instItems?.length){
+    detailHtml+=`<div class="detail-box"><div class="detail-hdr">📦 Materiais</div>
+      ${instItems.map(i=>{
+        const sell=Math.round(i.unit_cost*(1+(i.margin_pct||30)/100)*i.quantity*100)/100;
+        return`<div class="mat-drow"><div class="mat-dname">${i.name}</div>
+        <div class="mat-dinfo"><span>${i.quantity} ${i.unit}</span><span>Custo: ${fmt(i.unit_cost*i.quantity)}</span><span class="mat-dsell">Venda: ${fmt(sell)}</span></div></div>`;
+      }).join('')}</div>`;
+  }
+  if(prevItems?.length){
+    const cfg=financeConfig||{};
+    const MULT={easy:cfg.mult_easy||1,medium:cfg.mult_medium||1.3,hard:cfg.mult_hard||1.7};
+    detailHtml+=`<div class="detail-box"><div class="detail-hdr">🧊 Equipamentos preventiva</div>
+      ${prevItems.map(i=>{
+        const sell=Math.round((i.base_price||250)*((MULT[i.difficulty])||1.3)*i.quantity*100)/100;
+        return`<div class="drow2"><span class="dlbl2">${typeL[i.ac_type]||i.ac_type} · ${(i.capacity_btu||0).toLocaleString()} BTU</span>
+          <span class="dval2">${i.quantity}× · ${diffL[i.difficulty]||i.difficulty} · ${fmt(sell)}</span></div>`;
+      }).join('')}</div>`;
+  }
+  if(corrItems?.length){
+    const ci=corrItems[0];
+    let rows='';
+    if(ci.has_gas) rows+=`<div class="drow2"><span class="dlbl2">💨 Gás ${(ci.gas_type||'').toUpperCase()}</span><span class="dval2">${ci.gas_kg}kg</span></div>`;
+    if(ci.has_nitrogen) rows+=`<div class="drow2"><span class="dlbl2">🔵 Nitrogênio</span><span class="dval2">${ci.nitrogen_m3}m³</span></div>`;
+    if(rows) detailHtml+=`<div class="detail-box"><div class="detail-hdr">⚡ Insumos corretiva</div>${rows}</div>`;
+  }
+  if(extras?.length){
+    detailHtml+=`<div class="detail-box"><div class="detail-hdr">➕ Extras</div>
+      ${extras.map(e=>`<div class="drow2"><span class="dlbl2">${e.description}</span><span class="dval2" style="color:var(--acc);">${fmt(e.value)}</span></div>`).join('')}</div>`;
+  }
+
+  // ---- AÇÕES ----
+  let actionsHtml='';
+  if(isDraft) actionsHtml=`
+    <button class="ab ab-send" onclick="doStatus('sent')">📤 Marcar como Enviado</button>
+    <button class="ab ab-edit" onclick="nav('${stypePage}.html?edit=${q.id}')">✏️ Editar orçamento</button>
+    <button class="ab ab-pdf"  onclick="nav('pdf-orcamento.html?id=${q.id}')">📄 Gerar PDF</button>`;
+  else if(isSent) actionsHtml=`
+    <button class="ab ab-approve" onclick="doApprove()">✅ Aprovado pelo cliente</button>
+    <button class="ab ab-reject"  onclick="doStatus('rejected')">✗ Cliente reprovou</button>
+    <button class="ab ab-edit"    onclick="nav('${stypePage}.html?edit=${q.id}')">✏️ Editar orçamento</button>
+    <button class="ab ab-pdf"     onclick="nav('pdf-orcamento.html?id=${q.id}')">📄 Gerar PDF</button>`;
+  else if(isApproved) actionsHtml=`
+    <button class="ab ab-agenda"  onclick="nav('agenda.html?approve_id=${q.id}')">📅 Agendar na Agenda</button>
+    <button class="ab ab-pdf"     onclick="nav('pdf-orcamento.html?id=${q.id}')">📄 Gerar PDF</button>`;
+  else if(isScheduled) actionsHtml=`
+    <button class="ab ab-finish"  onclick="doFinish()">✓ Marcar como Concluído</button>
+    <button class="ab ab-pdf"     onclick="nav('pdf-orcamento.html?id=${q.id}')">📄 Gerar PDF</button>`;
+  else if(isRejected) actionsHtml=`
+    <button class="ab ab-edit"    onclick="doStatus('draft')">🔄 Reabrir rascunho</button>
+    <button class="ab ab-pdf"     onclick="nav('pdf-orcamento.html?id=${q.id}')">📄 Gerar PDF</button>`;
+  else if(isFinished) actionsHtml=`
+    <button class="ab ab-pdf"     onclick="nav('pdf-orcamento.html?id=${q.id}')">📄 Gerar PDF</button>`;
+
+  // ---- HISTÓRICO ----
+  const tlHtml=logs?.length?`
+    <div class="sec-hdr"><div class="sec-title">Histórico</div></div>
+    <div class="timeline" style="padding:0 14px;">
+      ${logs.map(l=>`<div class="tl-item"><div class="tl-dot ok">✓</div><div class="tl-body">
+        <div class="tl-label">${LABELS[l.to_status]||l.to_status}</div>
+        <div class="tl-date">${fdatetime(l.changed_at)}</div>
+      </div></div>`).join('')}
+    </div>`:'';
+
+  document.getElementById('app').innerHTML=`
+  <div class="page">
+    <div class="hdr">
+      <button class="back-btn" onclick="nav('orcamentos.html')">←</button>
+      <h1>Orçamento #${q.sequence}/${q.year}</h1>
+    </div>
+
+    ${isRejected?`<div style="background:rgba(231,76,60,.1);padding:10px 14px;text-align:center;font-size:13px;color:var(--err);font-weight:700;">✗ Reprovado pelo cliente</div>`:''}
+    ${flowHtml}
+
+    <div style="padding:0 14px 8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <span class="${sBadgeClass(q.status)}" style="font-size:12px;padding:5px 12px;">${LABELS[q.status]||q.status}</span>
+        <span style="font-size:11px;color:var(--txt2);">${STYPE[stype]||''} · v${q.version} · ${fdate(q.created_at)}</span>
+      </div>
+      <div class="card" style="cursor:pointer;margin-bottom:8px;" onclick="nav('cliente-detalhe.html?id=${q.customers?.id}')">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div style="width:38px;height:38px;border-radius:50%;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--acc);">${initials(q.customers?.name)}</div>
+          <div style="flex:1;"><div style="font-size:14px;font-weight:600;">${q.customers?.name||'—'}</div>
+          ${q.customers?.phone?`<a class="tel" href="tel:${q.customers.phone}" style="font-size:12px;">${q.customers.phone}</a>`:''}</div>
+          <span style="color:var(--txt2);">›</span>
+        </div>
+      </div>
+      <div class="qsum">
+        <div class="qrow"><span>Custo estimado</span><span>${fmt(q.total_cost)}</span></div>
+        ${q.discount?`<div class="qrow"><span>Desconto</span><span style="color:var(--err);">— ${fmt(q.discount)}</span></div>`:''}
+        <div class="qrow qtotal"><span>TOTAL</span><span class="qval">${fmt(q.total_price)}</span></div>
+        <div class="qrow"><span style="color:var(--txt2);">Lucro estimado</span>
+          <span style="color:${q.estimated_profit>=0?'var(--ok)':'var(--err)'};">${fmt(q.estimated_profit)}</span></div>
+      </div>
+    </div>
+
+    ${detailHtml?`<div class="sec-hdr"><div class="sec-title">Detalhes do orçamento</div></div>${detailHtml}`:''}
+    ${tlHtml}
+
+    <div class="sec-hdr"><div class="sec-title">Ações</div></div>
+    <div class="action-grid">${actionsHtml}</div>
+
+    ${isDraft||isRejected?`
+      <div style="padding:0 14px 24px;">
+        <button class="btn berr btn-sm" style="width:auto;opacity:.7;" onclick="doDelete()">🗑️ Excluir orçamento</button>
+      </div>`:
+      '<div style="padding-bottom:24px;"></div>'}
+  </div>`;
+}
+
+async function doStatus(newStatus){
+  const labelMap={sent:'Marcar como Enviado',rejected:'Marcar como Reprovado',draft:'Reabrir rascunho'};
+  if(!confirm(`Confirmar: "${labelMap[newStatus]||newStatus}"?`))return;
+  const{data:q}=await sb.from('quotes').select('status').eq('id',quoteId).single();
+  await sb.from('quotes').update({status:newStatus,updated_at:new Date().toISOString()}).eq('id',quoteId);
+  await sb.from('status_logs').insert([{quote_id:parseInt(quoteId),owner_id:currentUser.id,
+    from_status:q?.status||null,to_status:newStatus,changed_by:currentUser.id,changed_at:new Date().toISOString()}]);
+  toast('Status atualizado!','ok');
+  await renderPage();
+}
+
+async function doApprove(){
+  if(!confirm('Confirmar aprovação do orçamento?'))return;
+  const{data:q}=await sb.from('quotes').select('*,customers(name)').eq('id',quoteId).single();
+  if(!q)return;
+  await sb.from('quotes').update({status:'approved',updated_at:new Date().toISOString()}).eq('id',quoteId);
+  await sb.from('status_logs').insert([{quote_id:parseInt(quoteId),owner_id:currentUser.id,
+    from_status:q.status,to_status:'approved',changed_by:currentUser.id,changed_at:new Date().toISOString()}]);
+  // Criar registro de serviço
+  await sb.from('quote_services').upsert([{quote_id:parseInt(quoteId),owner_id:currentUser.id,status:'pending'}],{onConflict:'quote_id'});
+  // Lançar despesa de material
+  const{data:instItems}=await sb.from('quote_installation_items').select('*').eq('quote_id',quoteId);
+  if(instItems?.length){
+    const matCost=Math.round(instItems.reduce((s,i)=>s+(i.unit_cost||0)*(i.quantity||1),0)*100)/100;
+    if(matCost>0){
+      await sb.from('accounts_payable').insert([{
+        owner_id:currentUser.id,category:'material',recurrence:'variable',
+        description:`Materiais — #${q.sequence}/${q.year} (${q.customers?.name||'cliente'})`,
+        amount:matCost,is_paid:false,
+        created_at:new Date().toISOString(),updated_at:new Date().toISOString(),
+      }]);
+    }
+  }
+  toast('Aprovado! Agende o serviço na aba Agenda.','ok',4000);
+  await renderPage();
+}
+
+async function doFinish(){
+  if(!confirm('Confirmar conclusão do serviço?'))return;
+  const{data:q}=await sb.from('quotes').select('*,customers(name)').eq('id',quoteId).single();
+  if(!q)return;
+  await sb.from('quotes').update({status:'finished',updated_at:new Date().toISOString()}).eq('id',quoteId);
+  await sb.from('status_logs').insert([{quote_id:parseInt(quoteId),owner_id:currentUser.id,
+    from_status:q.status,to_status:'finished',changed_by:currentUser.id,changed_at:new Date().toISOString()}]);
+  await sb.from('quote_services').update({status:'finished',finished_at:new Date().toISOString()}).eq('quote_id',parseInt(quoteId));
+  // Gerar conta a receber
+  const{data:existR}=await sb.from('accounts_receivable').select('id').eq('owner_id',currentUser.id).eq('quote_id',parseInt(quoteId)).single();
+  if(!existR){
+    const{error:re}=await sb.from('accounts_receivable').insert([{
+      owner_id:currentUser.id,
+      quote_id:parseInt(quoteId),
+      service_id:null,
+      customer_name:q.customers?.name||'—',
+      amount_due:q.total_price||0,
+      amount_received:0,
+      status:'pending',
+    }]);
+    if(re){toast('Erro ao gerar conta a receber: '+re.message,'err');}
+    else toast('Concluído! Conta a receber criada no Financeiro.','ok',4000);
+  } else {
+    toast('Serviço concluído!','ok');
+  }
+  await renderPage();
+}
+
+async function doDelete(){
+  if(!confirm('Excluir este orçamento?\n\nEle ficará registrado nos Logs do sistema.'))return;
+  const{data:q}=await sb.from('quotes').select('sequence,year,customers(name),total_price').eq('id',quoteId).single();
+  // Soft delete
+  await sb.from('quotes').update({is_deleted:true,deleted_at:new Date().toISOString(),status:'draft'}).eq('id',quoteId);
+  // Log do sistema
+  await sb.from('system_logs').insert([{
+    owner_id:currentUser.id, action:'deleted', entity:'quote', entity_id:parseInt(quoteId),
+    description:`Orçamento #${q?.sequence}/${q?.year} — ${q?.customers?.name||'—'} — ${fmt(q?.total_price||0)} excluído pelo usuário`,
+    data_json:{sequence:q?.sequence,year:q?.year,total_price:q?.total_price},
+  }]);
+  toast('Orçamento excluído','ok');
+  setTimeout(()=>nav('orcamentos.html'),800);
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<meta name="mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0F1923">
+<title>MeuGestHVAC — Novo Orçamento</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+.type-card{background:var(--bg2);border:2px solid var(--bdr);border-radius:14px;padding:20px 18px;margin-bottom:12px;cursor:pointer;display:flex;align-items:center;gap:16px;transition:border-color .2s;}
+.type-card:active{border-color:var(--acc);}
+.type-ico{font-size:36px;width:52px;text-align:center;flex-shrink:0;}
+.type-info h3{font-size:16px;font-weight:700;margin-bottom:4px;}
+.type-info p{font-size:12px;color:var(--txt2);line-height:1.5;}
+.cust-dropdown{position:absolute;top:100%;left:0;right:0;background:var(--bg2);border:1.5px solid var(--acc);border-radius:0 0 10px 10px;z-index:50;max-height:220px;overflow-y:auto;}
+.cust-opt{padding:11px 14px;font-size:14px;cursor:pointer;border-bottom:1px solid var(--bdr);}
+.cust-opt:last-child{border-bottom:none;}
+.cust-opt:active{background:var(--bg3);}
+.sel-cust{background:rgba(0,191,255,.08);border:1.5px solid var(--acc);border-radius:10px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;}
+.sel-cust span{font-size:14px;font-weight:600;}
+.sel-cust button{background:none;border:none;color:var(--txt2);font-size:18px;cursor:pointer;}
+</style>
+</head>
+<body>
+<div id="app"><div class="loading"><div class="spin"></div><p>Carregando...</p></div></div>
+<script src="js/config.js"></script><script src="js/auth.js"></script>
+<script>
+const params      = new URLSearchParams(window.location.search);
+const preCustomer = params.get('customer_id');
+let customers = [], selectedCust = null, step = 'customer';
+
+(async()=>{
+  const ok = await requireAuth(); if(!ok) return;
+  const {data} = await sb.from('customers')
+    .select('id,name,phone').eq('owner_id', currentUser.id).eq('is_active', true).order('name');
+  customers = data || [];
+  if(preCustomer){
+    selectedCust = customers.find(c=>c.id==preCustomer)||null;
+    if(selectedCust) step='type';
+  }
+  draw();
+})();
+
+function draw(){
+  document.getElementById('app').innerHTML=`
+  <div class="page">
+    <div class="hdr">
+      <button class="back-btn" onclick="history.back()">←</button>
+      <h1>Novo Orçamento</h1>
+    </div>
+    <div class="fp">
+      ${step==='customer' ? custStep() : typeStep()}
+    </div>
+  </div>`;
+  if(step==='customer') bindSearch();
+}
+
+function custStep(){ return `
+  <div class="fsec" style="margin-top:4px;">1. Selecionar cliente</div>
+  <p style="font-size:12px;color:var(--txt2);margin-bottom:12px;">Busque um cliente existente ou cadastre um novo</p>
+  <div style="position:relative;">
+    <div class="fg"><label class="fl">Buscar cliente</label>
+      <input class="fi" id="custSearch" placeholder="Nome, telefone..." autocomplete="off"></div>
+    <div id="custDropdown"></div>
+  </div>
+  <div style="margin-top:10px;text-align:center;font-size:12px;color:var(--txt2);">ou</div>
+  <button class="btn bs" style="margin-top:8px;" onclick="nav('cliente-novo.html')">+ Cadastrar novo cliente</button>`;}
+
+function typeStep(){ return `
+  <div style="background:rgba(0,191,255,.08);border:1.5px solid var(--acc);border-radius:10px;padding:12px 14px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;">
+    <div>
+      <div style="font-size:11px;color:var(--txt2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px;">Cliente</div>
+      <div style="font-size:15px;font-weight:700;">${selectedCust?.name}</div>
+    </div>
+    <button style="background:none;border:none;color:var(--txt2);font-size:20px;cursor:pointer;" onclick="step='customer';selectedCust=null;draw()">✕</button>
+  </div>
+  <div class="fsec" style="margin-top:0;">2. Tipo de serviço</div>
+  <div class="type-card" onclick="goQuote('instalacao')">
+    <div class="type-ico">🔧</div>
+    <div class="type-info"><h3>Instalação</h3><p>Materiais, tubulação, cabos e mão de obra de instalação</p></div>
+  </div>
+  <div class="type-card" onclick="goQuote('preventiva')">
+    <div class="type-ico">🛡️</div>
+    <div class="type-info"><h3>Preventiva</h3><p>Manutenção preventiva por tipo e capacidade de equipamento</p></div>
+  </div>
+  <div class="type-card" onclick="goQuote('corretiva')">
+    <div class="type-ico">⚡</div>
+    <div class="type-info"><h3>Corretiva</h3><p>Reparo com peças, gás e serviços de diagnóstico</p></div>
+  </div>`;}
+
+function bindSearch(){
+  const inp = document.getElementById('custSearch'); if(!inp) return;
+  inp.addEventListener('input', ()=>{
+    const q = inp.value.toLowerCase();
+    const dd = document.getElementById('custDropdown'); if(!dd) return;
+    if(!q){dd.innerHTML='';return;}
+    const filtered = customers.filter(c=>
+      c.name.toLowerCase().includes(q)||(c.phone||'').includes(q)).slice(0,8);
+    if(!filtered.length){dd.innerHTML='';return;}
+    dd.innerHTML=`<div class="cust-dropdown">${filtered.map(c=>`
+      <div class="cust-opt" onclick="pickCust(${c.id})">
+        <strong>${c.name}</strong>${c.phone?` <span style="color:var(--txt2);font-size:12px;">· ${c.phone}</span>`:''}
+      </div>`).join('')}</div>`;
+  });
+}
+
+function pickCust(id){
+  selectedCust = customers.find(c=>c.id===id)||null;
+  step = 'type'; draw();
+}
+
+function goQuote(type){
+  if(!selectedCust){toast('Selecione um cliente','err');return;}
+  nav(`orcamento-${type}.html?customer_id=${selectedCust.id}`);
+}
+</script>
+</body>
+</html>
